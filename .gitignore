@@ -1,0 +1,10 @@
+/target/
+**/node_modules/
+**/dist/
+*.quiver-part
+*.quiver.json
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
