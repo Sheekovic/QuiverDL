@@ -6,7 +6,8 @@ and contributor feedback reveal better solutions.
 ## Foundation — in progress
 
 - [x] Native Rust HTTP and HTTPS transfer engine
-- [x] Safe partial files and conservative resume validation
+- [x] Partial-file staging and validator-gated resume decisions
+- [ ] Validate the returned `Content-Range` start before appending resumed bytes
 - [x] Pause, cancel, progress, and SHA-256 primitives
 - [x] Tauri and React desktop foundation
 - [x] Local HTTP integration testing

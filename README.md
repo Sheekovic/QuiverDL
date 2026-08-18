@@ -24,9 +24,11 @@ native Rust engine with a lightweight Tauri and React desktop application.
 
 ## Current status
 
-The first engine slice supports HTTP and HTTPS transfers, safe partial files, conservative resume,
-pause and cancel controls, progress events, and SHA-256 verification. The desktop app can inspect a
-URL through the Rust engine and report its size, resume support, and remote validators.
+The first engine slice supports HTTP and HTTPS transfers, staged partial files, resume decisions
+gated by matching remote validators, pause and cancel controls, progress events, and SHA-256
+verification. Response-range validation is still being hardened before resume is considered
+complete. The desktop app can inspect a URL through the Rust engine and report its size, resume
+support, and remote validators.
 
 The next major milestones are wiring transfers into the desktop queue, persistent crash recovery,
 and bounded multi-segment downloading. See the [roadmap](ROADMAP.md) for approachable tasks and
@@ -74,7 +76,7 @@ npm run build --prefix apps/desktop
 Run all required checks before submitting a change:
 
 ```powershell
-cargo fmt --all --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm run build --prefix apps/desktop

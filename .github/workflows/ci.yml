@@ -76,5 +76,9 @@ jobs:
         working-directory: apps/desktop
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Check desktop crate
-        run: cargo check -p quiver-desktop
+        with:
+          components: clippy
+      - name: Run workspace Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace

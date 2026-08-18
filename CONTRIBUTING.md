@@ -59,7 +59,7 @@ Recommended branch names include `fix/resume-validation`, `feat/download-queue`,
 ## Required checks
 
 ```powershell
-cargo fmt --all --check
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm run build --prefix apps/desktop
@@ -113,4 +113,3 @@ change, never the contributor.
 By submitting a contribution, you agree that it is your original work or that you have the right
 to submit it, and that it may be distributed under QuiverDL's
 [GPL-3.0-or-later license](LICENSE).
-
