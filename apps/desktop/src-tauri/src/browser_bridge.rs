@@ -7,6 +7,8 @@ use url::Url;
 const HOST_NAME: &str = "app.quiverdl.native";
 const MAX_BRIDGE_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_INBOX_ITEM_BYTES: u64 = 1024 * 1024;
+const MAX_INBOX_ENTRIES_SCANNED: usize = 500;
+const MAX_INBOX_RESULTS: usize = 100;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct BridgeConfig {
@@ -139,23 +141,26 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
         Err(error) => return Err(format!("Could not read the browser inbox: {error}")),
     };
     let mut requests = Vec::new();
-    while let Some(entry) = directory
-        .next_entry()
-        .await
-        .map_err(|error| format!("Could not inspect the browser inbox: {error}"))?
-    {
-        if requests.len() >= 100
-            || entry.path().extension().and_then(|value| value.to_str()) != Some("json")
-        {
+    let mut entries_scanned = 0;
+    while entries_scanned < MAX_INBOX_ENTRIES_SCANNED && requests.len() < MAX_INBOX_RESULTS {
+        let Some(entry) = directory
+            .next_entry()
+            .await
+            .map_err(|error| format!("Could not inspect the browser inbox: {error}"))?
+        else {
+            break;
+        };
+        entries_scanned += 1;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
         let Ok(Some(bytes)) =
-            super::persistence::read_bounded_regular_file(&entry.path(), MAX_INBOX_ITEM_BYTES)
-                .await
+            super::persistence::read_bounded_regular_file(&path, MAX_INBOX_ITEM_BYTES).await
         else {
             continue;
         };
-        let Ok(request) = parse_inbox_item(&bytes) else {
+        let Ok(request) = parse_inbox_item(&path, &bytes) else {
             continue;
         };
         requests.push(request);
@@ -164,7 +169,7 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
     Ok(requests)
 }
 
-fn parse_inbox_item(bytes: &[u8]) -> Result<BrowserInboxItem, String> {
+fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInboxItem, String> {
     let request: BrowserInboxItem =
         serde_json::from_slice(bytes).map_err(|_| "Invalid browser request".to_string())?;
     let valid_url = Url::parse(&request.url)
@@ -173,6 +178,8 @@ fn parse_inbox_item(bytes: &[u8]) -> Result<BrowserInboxItem, String> {
     if request.version != 1
         || !valid_url
         || request.id.len() > 128
+        || path.file_stem().and_then(|value| value.to_str()) != Some(request.id.as_str())
+        || path.extension().and_then(|value| value.to_str()) != Some("json")
         || !request
             .id
             .chars()
@@ -201,18 +208,31 @@ pub(crate) async fn acknowledge_browser_request(id: String) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::parse_inbox_item;
 
     #[test]
     fn accepts_the_native_host_inbox_contract() {
         let item = parse_inbox_item(
+            Path::new("80cf859d-fac7-4ec2-a5e2-63a3242c9776.json"),
             br#"{"version":1,"id":"80cf859d-fac7-4ec2-a5e2-63a3242c9776","url":"https://example.test/file.zip","suggestedFilename":"file.zip"}"#,
         )
         .expect("native host request should be accepted");
         assert_eq!(item.suggested_filename.as_deref(), Some("file.zip"));
         assert!(
-            parse_inbox_item(br#"{"version":1,"id":"../escape","url":"file:///etc/passwd"}"#)
-                .is_err()
+            parse_inbox_item(
+                Path::new("escape.json"),
+                br#"{"version":1,"id":"../escape","url":"file:///etc/passwd"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_inbox_item(
+                Path::new("different.json"),
+                br#"{"version":1,"id":"80cf859d-fac7-4ec2-a5e2-63a3242c9776","url":"https://example.test/file.zip"}"#
+            )
+            .is_err()
         );
     }
 }
