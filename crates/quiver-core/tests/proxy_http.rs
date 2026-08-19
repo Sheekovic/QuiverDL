@@ -23,12 +23,7 @@ async fn downloads_through_an_authenticated_http_proxy() {
                 .accept()
                 .await
                 .expect("proxy request should arrive");
-            let mut bytes = vec![0_u8; 8 * 1024];
-            let count = socket
-                .read(&mut bytes)
-                .await
-                .expect("proxy request should read");
-            let request = String::from_utf8_lossy(&bytes[..count]);
+            let request = read_request_headers(&mut socket).await;
             assert!(
                 request.starts_with("GET http://downloads.example.invalid/fixture.bin HTTP/1.1")
             );
@@ -94,4 +89,25 @@ async fn downloads_through_an_authenticated_http_proxy() {
         FIXTURE
     );
     proxy_server.await.expect("proxy fixture should finish");
+}
+
+async fn read_request_headers(socket: &mut tokio::net::TcpStream) -> String {
+    const MAX_REQUEST_HEADERS: usize = 8 * 1024;
+    let mut request = Vec::with_capacity(1024);
+    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+        assert!(
+            request.len() < MAX_REQUEST_HEADERS,
+            "proxy request headers exceeded the fixture limit"
+        );
+        let remaining = MAX_REQUEST_HEADERS - request.len();
+        let mut chunk = [0_u8; 1024];
+        let chunk_limit = remaining.min(chunk.len());
+        let count = socket
+            .read(&mut chunk[..chunk_limit])
+            .await
+            .expect("proxy request should read");
+        assert!(count > 0, "proxy request ended before its headers");
+        request.extend_from_slice(&chunk[..count]);
+    }
+    String::from_utf8(request).expect("proxy request headers should be UTF-8")
 }
