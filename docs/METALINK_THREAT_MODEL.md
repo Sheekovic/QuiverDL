@@ -89,8 +89,11 @@ QuiverDL applies stricter platform-aware containment:
   such as `a` and `a/b`; one destination cannot simultaneously be a file and directory.
 - When a component already exists, compare stable filesystem identity obtained from the no-follow
   handle so short-name or filesystem-specific aliases cannot make two batch paths share a target.
-- Reserve the destination, partial, state, temporary, and segment paths for the full batch. Use the
-  existing no-replace promotion and preserve recoverable partials after ordinary interruption.
+- Before starting, derive every destination, partial, state, temporary, merge, and segment path for
+  the full batch. Apply the same platform-aware normalization and alias checks to this combined
+  namespace, reject every destination/artifact or artifact/artifact intersection, and only then
+  reserve the namespace. Use the existing no-replace promotion and preserve recoverable partials
+  after ordinary interruption.
 - Do not implement Metalink-declared symbolic links, hard links, permissions, or executable bits.
 
 ## Network and integrity boundary
