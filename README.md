@@ -6,6 +6,11 @@
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3%2B-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+[Website](https://sheekovic.github.io/QuiverDL/) ·
+[Privacy Policy](https://sheekovic.github.io/QuiverDL/privacy/) ·
+[Roadmap](ROADMAP.md) ·
+[Contributing](CONTRIBUTING.md)
+
 QuiverDL is a performance-first, privacy-respecting open-source download manager. It combines a
 native Rust engine with a lightweight Tauri and React desktop application.
 
