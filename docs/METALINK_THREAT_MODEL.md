@@ -63,7 +63,9 @@ QuiverDL applies stricter platform-aware containment:
 - Join only sanitized relative components beneath a destination root chosen after preview.
 - Canonicalize the existing root, reject symlink traversal, and verify containment again before
   every create and final promotion.
-- Detect case-folded and normalized-name collisions on Windows and macOS before starting any file.
+- Conservatively reject case-folded or Unicode-normalized path collisions on every platform before
+  starting any file. Do not infer destination filesystem semantics from the operating-system name;
+  Linux destinations can also be case-insensitive or normalization-aware.
 - Reserve the destination, partial, state, temporary, and segment paths for the full batch. Use the
   existing no-replace promotion and preserve recoverable partials after ordinary interruption.
 - Do not implement Metalink-declared symbolic links, hard links, permissions, or executable bits.
