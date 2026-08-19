@@ -6,6 +6,7 @@ const SERVICE: &str = "app.quiverdl.proxy";
 const ACCOUNT: &str = "default";
 const MAX_USERNAME_CHARS: usize = 512;
 const MAX_PASSWORD_BYTES: usize = 8 * 1024;
+const MAX_STORED_CREDENTIAL_BYTES: usize = 2_560;
 
 #[derive(Deserialize)]
 struct StoredCredential {
@@ -51,6 +52,21 @@ fn entry() -> Result<Entry, String> {
         .map_err(|_| "The operating-system credential store is unavailable".into())
 }
 
+fn encode_credential(username: &str, password: &str) -> Result<Zeroizing<Vec<u8>>, String> {
+    let payload = CredentialRef { username, password };
+    let encoded = Zeroizing::new(
+        serde_json::to_vec(&payload)
+            .map_err(|_| "Could not prepare proxy credentials for secure storage")?,
+    );
+    if encoded.len() > MAX_STORED_CREDENTIAL_BYTES {
+        return Err(
+            "The proxy username and password are too long for the operating-system credential store"
+                .into(),
+        );
+    }
+    Ok(encoded)
+}
+
 #[tauri::command]
 pub(crate) async fn save_proxy_credentials(
     username: String,
@@ -60,14 +76,7 @@ pub(crate) async fn save_proxy_credentials(
     let username = Zeroizing::new(username);
     let password = Zeroizing::new(password);
     tokio::task::spawn_blocking(move || {
-        let payload = CredentialRef {
-            username: username.as_str(),
-            password: password.as_str(),
-        };
-        let encoded = Zeroizing::new(
-            serde_json::to_vec(&payload)
-                .map_err(|_| "Could not prepare proxy credentials for secure storage")?,
-        );
+        let encoded = encode_credential(username.as_str(), password.as_str())?;
         entry()?.set_secret(encoded.as_slice()).map_err(|_| {
             "Could not save proxy credentials in the operating-system credential store".into()
         })
@@ -136,7 +145,7 @@ fn load_stored() -> Result<Option<StoredCredential>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate;
+    use super::{encode_credential, validate};
 
     #[test]
     fn rejects_ambiguous_or_control_character_credentials() {
@@ -144,5 +153,15 @@ mod tests {
         assert!(validate("user:name", "secret").is_err());
         assert!(validate("user", "line\nbreak").is_err());
         assert!(validate("user", "secret").is_ok());
+    }
+
+    #[test]
+    fn rejects_a_serialized_credential_above_the_windows_limit() {
+        let password = "\"".repeat(1_300);
+        assert!(validate("user", &password).is_ok());
+        let error = encode_credential("user", &password)
+            .expect_err("JSON escaping must not exceed the cross-platform keyring limit");
+        assert!(error.contains("too long"));
+        assert!(!error.contains(&password));
     }
 }
