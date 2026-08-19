@@ -424,7 +424,7 @@ async fn cancellation_interrupts_a_stalled_response() {
 async fn refuses_a_symlinked_partial_without_touching_its_target() {
     use std::os::unix::fs::symlink;
 
-    let (url, server) = fixture_server(2).await;
+    let (url, server) = fixture_server(1).await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
     let partial = directory.path().join("fixture.bin.quiver-part");
