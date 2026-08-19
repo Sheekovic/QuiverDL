@@ -9,6 +9,7 @@
   --accent: #5267ff;
   --accent-strong: #3547d8;
   --accent-soft: #e8ebff;
+  --button-primary: #3547d8;
   --lime: #baf36f;
   --shadow: 0 28px 80px rgba(41, 52, 91, 0.14);
   --max: 1160px;
@@ -25,6 +26,7 @@
     --accent: #8290ff;
     --accent-strong: #a5afff;
     --accent-soft: #1d2652;
+    --button-primary: #5267d9;
     --lime: #baf36f;
     --shadow: 0 32px 90px rgba(0, 0, 0, 0.42);
   }
@@ -257,8 +259,8 @@ p {
 }
 
 .button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--button-primary);
+  background: var(--button-primary);
   color: #fff;
   box-shadow: 0 13px 28px color-mix(in srgb, var(--accent) 28%, transparent);
 }
