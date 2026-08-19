@@ -25,9 +25,10 @@ updater.
 
 The tracked `tauri.updater.conf.json.template` enables signed updater artifacts and the passive
 Windows installer only for a protected direct-release build. `scripts/prepare-updater-config.mjs`
-materializes an ignored config after validating `TAURI_UPDATER_PUBLIC_KEY`; it refuses to overwrite an
-existing config. Pull-request workflows never receive the public/private key pair or enable the
-updater.
+materializes an ignored config after decoding and validating `TAURI_UPDATER_PUBLIC_KEY` as the
+canonical Tauri Minisign public-key format, including its packet type and key identifier. It rejects
+private-key material and refuses to overwrite an existing config. Pull-request workflows never
+receive the public/private key pair or enable the updater.
 
 ## Manifest generation
 
