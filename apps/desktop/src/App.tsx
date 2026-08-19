@@ -638,6 +638,9 @@ function App() {
       return;
     }
 
+    await recoveryGate.current?.promise;
+    if (!(await registerDownload(item, settings))) return;
+
     if (browserRequestId) {
       try {
         await invoke("acknowledge_browser_request", { id: browserRequestId });
@@ -650,15 +653,13 @@ function App() {
       }
     }
 
-    await recoveryGate.current?.promise;
-    if (await registerDownload(item, settings)) {
-      void executeDownload(item, settings);
-    }
+    void executeDownload(item, settings);
   }
 
   async function registerDownload(item: DownloadItem, executionSettings: AppSettings) {
     if (pendingCancellations.current.has(item.id)) {
       pendingCancellations.current.delete(item.id);
+      updateDownload(item.id, { status: "cancelled", error: undefined });
       return false;
     }
     try {
@@ -811,7 +812,7 @@ function App() {
     setError("");
     if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
       pendingCancellations.current.add(item.id);
-      updateDownload(item.id, { status: "cancelled", error: undefined });
+      updateDownload(item.id, { status: "cancelling", error: undefined });
       return;
     }
     try {

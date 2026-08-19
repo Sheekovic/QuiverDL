@@ -59,6 +59,7 @@ struct ActiveTransfer {
     reservation_keys: HashSet<String>,
     queue_ticket: Option<u64>,
     scheduled_for_ms: Option<u64>,
+    started: bool,
 }
 
 #[derive(Default)]
@@ -252,6 +253,7 @@ fn register_download(
             reservation_keys: HashSet::new(),
             queue_ticket,
             scheduled_for_ms,
+            started: false,
         },
     );
     Ok(())
@@ -263,11 +265,19 @@ fn discard_registered_download(
     task_id: String,
 ) -> Result<(), String> {
     let task_id = validate_task_id(&task_id)?;
-    let transfer = registry
-        .transfers
-        .lock()
-        .map_err(|_| "Download controls are unavailable".to_string())?
-        .remove(&task_id);
+    let transfer = {
+        let mut transfers = registry
+            .transfers
+            .lock()
+            .map_err(|_| "Download controls are unavailable".to_string())?;
+        if transfers
+            .get(&task_id)
+            .is_some_and(|transfer| transfer.started)
+        {
+            return Err("This download has already started".into());
+        }
+        transfers.remove(&task_id)
+    };
     if let Some(transfer) = transfer {
         transfer.control.cancel();
         if let Some(ticket) = transfer.queue_ticket {
@@ -288,10 +298,6 @@ async fn start_download(
     on_event: Channel<DownloadProgress>,
 ) -> Result<DownloadSummary, String> {
     let task_id = validate_task_id(&task_id)?;
-    let _cleanup = RegisteredTransferCleanup {
-        registry: &registry,
-        task_id: task_id.clone(),
-    };
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
     let settings = settings.unwrap_or_default();
     settings.validate()?;
@@ -299,24 +305,15 @@ async fn start_download(
         .as_deref()
         .map(parse_queue_timestamp)
         .transpose()?;
-    let (control, queue_ticket, scheduled_for_ms) = {
-        let transfers = registry
-            .transfers
-            .lock()
-            .map_err(|_| "Download controls are unavailable".to_string())?;
-        let transfer = transfers
-            .get(&task_id)
-            .ok_or_else(|| "Register this download before starting it".to_string())?;
-        if transfer.scheduled_for_ms != requested_schedule
-            || (transfer.queue_ticket.is_some()) != (settings.queue_mode == "sequential")
-        {
-            return Err("The registered queue policy does not match this download".into());
-        }
-        (
-            transfer.control.clone(),
-            transfer.queue_ticket,
-            transfer.scheduled_for_ms,
-        )
+    let (control, queue_ticket, scheduled_for_ms) = claim_registered_transfer(
+        &registry,
+        &task_id,
+        requested_schedule,
+        settings.queue_mode == "sequential",
+    )?;
+    let _cleanup = RegisteredTransferCleanup {
+        registry: &registry,
+        task_id: task_id.clone(),
     };
     let destination = prepare_destination(&destination).await?;
     control
@@ -487,6 +484,35 @@ fn remove_transfer(registry: &TransferRegistry, task_id: &str) {
     if let Some(ticket) = ticket {
         registry.sequential_queue.remove(ticket);
     }
+}
+
+fn claim_registered_transfer(
+    registry: &TransferRegistry,
+    task_id: &str,
+    requested_schedule: Option<u64>,
+    sequential: bool,
+) -> Result<(DownloadControl, Option<u64>, Option<u64>), String> {
+    let mut transfers = registry
+        .transfers
+        .lock()
+        .map_err(|_| "Download controls are unavailable".to_string())?;
+    let transfer = transfers
+        .get_mut(task_id)
+        .ok_or_else(|| "Register this download before starting it".to_string())?;
+    if transfer.started {
+        return Err("This download has already started".into());
+    }
+    if transfer.scheduled_for_ms != requested_schedule
+        || transfer.queue_ticket.is_some() != sequential
+    {
+        return Err("The registered queue policy does not match this download".into());
+    }
+    transfer.started = true;
+    Ok((
+        transfer.control.clone(),
+        transfer.queue_ticket,
+        transfer.scheduled_for_ms,
+    ))
 }
 
 struct RegisteredTransferCleanup<'a> {
@@ -785,9 +811,10 @@ mod tests {
     use quiver_core::DownloadStatus;
 
     use super::{
-        AppSettings, DownloadProgress, SequentialQueue, parse_queue_timestamp, prepare_destination,
-        proxy_policy, sanitize_filename, schedule_sleep_duration, validate_destination,
-        validate_task_id, wait_for_queue_turn,
+        ActiveTransfer, AppSettings, DownloadProgress, SequentialQueue, TransferRegistry,
+        claim_registered_transfer, parse_queue_timestamp, prepare_destination, proxy_policy,
+        sanitize_filename, schedule_sleep_duration, validate_destination, validate_task_id,
+        wait_for_queue_turn,
     };
 
     #[test]
@@ -820,6 +847,39 @@ mod tests {
         );
         assert_eq!(schedule_sleep_duration(1_000, 1_000), None);
         assert_eq!(schedule_sleep_duration(999, 1_000), None);
+    }
+
+    #[test]
+    fn duplicate_start_cannot_claim_or_remove_the_active_registration() {
+        let registry = TransferRegistry::default();
+        let ticket = registry
+            .sequential_queue
+            .register(None)
+            .expect("queue ticket");
+        registry
+            .transfers
+            .lock()
+            .expect("transfer registry")
+            .insert(
+                "duplicate-start".into(),
+                ActiveTransfer {
+                    control: quiver_core::DownloadControl::new(),
+                    reservation_keys: std::collections::HashSet::new(),
+                    queue_ticket: Some(ticket),
+                    scheduled_for_ms: None,
+                    started: false,
+                },
+            );
+
+        claim_registered_transfer(&registry, "duplicate-start", None, true)
+            .expect("first start owns cleanup");
+        assert!(claim_registered_transfer(&registry, "duplicate-start", None, true).is_err());
+        let transfers = registry.transfers.lock().expect("transfer registry");
+        assert!(
+            transfers
+                .get("duplicate-start")
+                .is_some_and(|item| item.started)
+        );
     }
 
     #[tokio::test]
