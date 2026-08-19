@@ -31,11 +31,20 @@ fn quit_app(app: AppHandle) {
     app.exit(0);
 }
 
-#[derive(Default)]
 struct TransferRegistry {
     transfers: Mutex<HashMap<String, ActiveTransfer>>,
-    global_limiter: Mutex<Option<BandwidthLimiter>>,
+    global_limiter: BandwidthLimiter,
     host_policy: HostConnectionPolicy,
+}
+
+impl Default for TransferRegistry {
+    fn default() -> Self {
+        Self {
+            transfers: Mutex::default(),
+            global_limiter: BandwidthLimiter::unlimited(),
+            host_policy: HostConnectionPolicy::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -116,26 +125,12 @@ async fn start_download(
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
     let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
-    let global_limiter =
-        if let Some(limit) = settings.global_speed_limit_bps.filter(|limit| *limit > 0) {
-            let mut limiter = registry
-                .global_limiter
-                .lock()
-                .map_err(|_| "Global speed controls are unavailable".to_string())?;
-            if let Some(existing) = limiter.as_ref() {
-                existing.set_bytes_per_second(limit);
-                Some(existing.clone())
-            } else {
-                let created = BandwidthLimiter::new(limit).expect("positive speed limit");
-                *limiter = Some(created.clone());
-                Some(created)
-            }
-        } else {
-            None
-        };
+    registry
+        .global_limiter
+        .set_bytes_per_second(settings.global_speed_limit_bps.unwrap_or(0));
     let engine = DownloadEngine::new()
         .map_err(|error| error.to_string())?
-        .with_global_limiter(global_limiter)
+        .with_global_limiter(Some(registry.global_limiter.clone()))
         .with_host_policy(registry.host_policy.clone());
     let mut request = DownloadRequest::new(url, &destination.path);
     request.retry_policy = RetryPolicy {
@@ -237,6 +232,20 @@ fn control_download(
         "cancel" => control.cancel(),
         _ => return Err("Unsupported download action".into()),
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_global_speed_limit(
+    registry: State<'_, TransferRegistry>,
+    bytes_per_second: Option<u64>,
+) -> Result<(), String> {
+    if bytes_per_second.is_some_and(|limit| !(1024..=1024_u64.pow(4)).contains(&limit)) {
+        return Err("Global speed limit must be between 1 KiB/s and 1 TiB/s".into());
+    }
+    registry
+        .global_limiter
+        .set_bytes_per_second(bytes_per_second.unwrap_or(0));
     Ok(())
 }
 
@@ -427,6 +436,7 @@ pub fn run() {
             inspect_url,
             start_download,
             control_download,
+            set_global_speed_limit,
             load_app_state,
             save_app_state,
             get_browser_bridge_info,

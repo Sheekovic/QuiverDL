@@ -326,6 +326,12 @@ function App() {
     document.documentElement.dir = settings.language === "ar" ? "rtl" : "ltr";
   }, [settings.language, settings.theme]);
 
+  useEffect(() => {
+    void invoke("set_global_speed_limit", {
+      bytesPerSecond: settings.globalSpeedLimitBps,
+    }).catch((cause) => setError(String(cause)));
+  }, [settings.globalSpeedLimitBps]);
+
   const counts = useMemo(
     () => ({
       active: downloads.filter((item) => ACTIVE_STATUSES.has(item.status)).length,

@@ -450,7 +450,7 @@ impl DownloadEngine {
             let mut output = state::open_regular_file(partial_path, false, true).await?;
             let mut merged = 0_u64;
             for path in &segment_paths {
-                let mut segment = tokio::fs::File::open(path).await?;
+                let mut segment = state::open_regular_file_for_read(path).await?;
                 merged = merged
                     .checked_add(tokio::io::copy(&mut segment, &mut output).await?)
                     .ok_or_else(|| Error::InvalidResponse("merged size overflowed u64".into()))?;
@@ -925,7 +925,7 @@ async fn file_len(path: &Path) -> Result<u64> {
 }
 
 async fn hash_file(path: &Path, control: &DownloadControl) -> Result<[u8; 32]> {
-    let mut file = tokio::fs::File::open(path).await?;
+    let mut file = state::open_regular_file_for_read(path).await?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 128 * 1024];
     loop {

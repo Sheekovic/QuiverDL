@@ -72,6 +72,23 @@ pub(crate) async fn open_regular_file(
     Ok(file)
 }
 
+pub(crate) async fn open_regular_file_for_read(path: &Path) -> Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
+    if !file.metadata().await?.is_file() {
+        return Err(Error::InvalidResponse(format!(
+            "recovery path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
 #[cfg(windows)]
 fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -145,5 +162,24 @@ mod tests {
         assert_eq!(actual.total_bytes, expected.total_bytes);
         assert_eq!(actual.etag, expected.etag);
         assert_eq!(actual.segment_ranges, expected.segment_ranges);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_follow_read_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let link = directory.path().join("segment");
+        tokio::fs::write(&target, b"fixture")
+            .await
+            .expect("target should write");
+        symlink(&target, &link).expect("symlink should be created");
+        assert!(super::open_regular_file_for_read(&link).await.is_err());
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"fixture"
+        );
     }
 }
