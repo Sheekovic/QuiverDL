@@ -25,14 +25,19 @@ state. Existing bytes are reused only when all relevant checks pass:
 
 - the saved URL still matches the requested URL;
 - the server still supports byte-range requests;
-- the saved and current total sizes match;
-- the partial file is shorter than the expected completed file; and
+- the saved and current total sizes agree, including when both are unavailable;
+- when a total size is known, the partial file is shorter than the expected completed file; and
 - a strong `ETag`, or otherwise a `Last-Modified` value, matches the saved validator.
 
 QuiverDL then sends both a `Range` request for the missing bytes and an `If-Range` condition using
 that validator. The server must return `206 Partial Content` with a valid `Content-Range` beginning
 at exactly the requested byte. The returned end, total, and received byte count are checked before
 the partial file can become the completed destination.
+
+Some servers support ranges and provide a validator without revealing the complete size. In that
+case, QuiverDL can still resume when both the saved and current totals are unknown. It cannot compare
+the partial length with a final size in advance, so it instead requires an exact returned range and
+checks that the response body ends at the byte declared by that range.
 
 ## When QuiverDL restarts
 
