@@ -2,6 +2,8 @@
 
 QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. The workflow uses locked Cargo and npm dependency graphs, builds on each target operating system, creates Windows NSIS/MSI installers plus a portable archive, Linux DEB/RPM/AppImage packages, macOS app/DMG bundles for Intel and Apple Silicon, and native-host archives with portable SHA-256 checksum files. Standalone macOS host archives are submitted to Apple notarization after the host is signed. Releases begin as drafts so a maintainer can inspect every asset before publishing.
 
+Windows users who install the NSIS or MSI desktop package and want browser integration must also download the matching `native-host-x86_64-pc-windows-msvc.zip`, then run its `extensions/native-host/install-windows.ps1` script against the included signed host. The portable archive already contains the same host and registration assets.
+
 ## One-time repository setup
 
 Create a protected GitHub environment named `release`. Add `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. Add `APPLE_CERTIFICATE` (base64 Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), and `APPLE_TEAM_ID`. Require maintainer approval for the environment.

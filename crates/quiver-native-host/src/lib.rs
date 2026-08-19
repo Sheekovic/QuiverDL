@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 const MAX_MESSAGE_BYTES: u32 = 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 16 * 1024;
+const MAX_BROWSER_URL_CHARS: usize = 8 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct BridgeConfig {
@@ -152,7 +153,14 @@ fn process_message_inner(config: &BridgeConfig, bytes: &[u8]) -> Result<String, 
     {
         return Err("Authentication failed".into());
     }
-    let url = Url::parse(message.url.trim()).map_err(|_| "Invalid download URL".to_string())?;
+    let submitted_url = message.url.trim();
+    if submitted_url.chars().count() > MAX_BROWSER_URL_CHARS {
+        return Err("Download URL is too long".into());
+    }
+    let url = Url::parse(submitted_url).map_err(|_| "Invalid download URL".to_string())?;
+    if url.as_str().chars().count() > MAX_BROWSER_URL_CHARS {
+        return Err("Download URL is too long".into());
+    }
     if !matches!(url.scheme(), "http" | "https") {
         return Err("Only HTTP and HTTPS downloads are accepted".into());
     }
@@ -251,8 +259,8 @@ mod tests {
     use std::{io::Cursor, path::Path};
 
     use super::{
-        BridgeConfig, HostResponse, MAX_CONFIG_BYTES, load_config, process_message, read_message,
-        write_message,
+        BridgeConfig, HostResponse, MAX_BROWSER_URL_CHARS, MAX_CONFIG_BYTES, load_config,
+        process_message, read_message, write_message,
     };
 
     #[test]
@@ -340,6 +348,30 @@ mod tests {
             .expect("request should read");
         assert!(!queued.contains("correct-token"));
         assert!(queued.contains(".._safe.zip"));
+    }
+
+    #[test]
+    fn rejects_urls_that_exceed_the_inbox_contract() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = BridgeConfig {
+            token: "correct-token".into(),
+            inbox_dir: directory.path().to_path_buf(),
+        };
+        let message = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "action": "enqueue",
+            "token": "correct-token",
+            "url": format!("https://example.test/{}", "a".repeat(MAX_BROWSER_URL_CHARS)),
+        }))
+        .expect("fixture should serialize");
+
+        assert!(!process_message(&config, &message).ok);
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("inbox should read")
+                .count(),
+            0
+        );
     }
 
     #[cfg(unix)]

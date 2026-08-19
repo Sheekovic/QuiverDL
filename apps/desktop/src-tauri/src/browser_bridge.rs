@@ -9,6 +9,8 @@ const MAX_BRIDGE_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_INBOX_ITEM_BYTES: u64 = 1024 * 1024;
 const MAX_INBOX_ENTRIES_SCANNED: usize = 500;
 const MAX_INBOX_RESULTS: usize = 100;
+const MAX_BROWSER_URL_CHARS: usize = 8 * 1024;
+const MAX_SUGGESTED_FILENAME_CHARS: usize = 180;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct BridgeConfig {
@@ -246,8 +248,15 @@ fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInbox
     let valid_url = Url::parse(&request.url)
         .ok()
         .is_some_and(|url| matches!(url.scheme(), "http" | "https"));
+    let valid_filename = request.suggested_filename.as_ref().is_none_or(|filename| {
+        !filename.is_empty()
+            && filename.chars().count() <= MAX_SUGGESTED_FILENAME_CHARS
+            && !filename.chars().any(char::is_control)
+    });
     if request.version != 1
         || !valid_url
+        || request.url.chars().count() > MAX_BROWSER_URL_CHARS
+        || !valid_filename
         || request.id.len() > 128
         || path.file_stem().and_then(|value| value.to_str()) != Some(request.id.as_str())
         || path.extension().and_then(|value| value.to_str()) != Some("json")
@@ -310,6 +319,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_oversized_inbox_fields() {
+        let id = "80cf859d-fac7-4ec2-a5e2-63a3242c9776";
+        let path = Path::new("80cf859d-fac7-4ec2-a5e2-63a3242c9776.json");
+        let oversized_url = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "id": id,
+            "url": format!("https://example.test/{}", "a".repeat(8 * 1024)),
+        }))
+        .expect("fixture should serialize");
+        let oversized_filename = serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "id": id,
+            "url": "https://example.test/file",
+            "suggestedFilename": "a".repeat(181),
+        }))
+        .expect("fixture should serialize");
+
+        assert!(parse_inbox_item(path, &oversized_url).is_err());
+        assert!(parse_inbox_item(path, &oversized_filename).is_err());
     }
 
     #[test]

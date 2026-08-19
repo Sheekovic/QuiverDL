@@ -164,6 +164,22 @@ jobs:
           "$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256"
           gh release upload "${{ github.ref_name }}" $archive "$archive.sha256" --clobber
 
+      - name: Create and attach Windows native messaging host archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "QuiverDL-native-host-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/quiver-native-host.exe, LICENSE, README.md -Destination $stage
+          Copy-Item extensions -Destination $stage -Recurse
+          $archive = Join-Path $env:RUNNER_TEMP "QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256"
+          gh release upload "${{ github.ref_name }}" $archive "$archive.sha256" --clobber
+
       - name: Attach native messaging host archive
         if: runner.os != 'Windows'
         env:
