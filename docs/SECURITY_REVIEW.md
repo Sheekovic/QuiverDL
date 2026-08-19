@@ -13,6 +13,13 @@ Review this checklist for changes touching transfers, paths, persistence, browse
 - Native messages are framed, size-limited, versioned, authenticated, and never persist the token in queue items.
 - Native bridge directories and token files are private before any secret bytes are written.
 - Browser interception remains off by default and does not forward cookies, credentials, history, or page content.
+- Distributed metadata is bounded before parsing, requires a complete preview before contacting
+  listed mirrors or peers or touching destination paths, and cannot select paths outside the
+  confirmed destination root.
+- Metalink mirrors cannot inherit origin credentials; every completed file requires its confirmed
+  size and a SHA-256-or-stronger whole-file digest before promotion.
+- BitTorrent changes stay outside the HTTP engine and separately review peer discovery, uploading,
+  proxy coverage, private torrents, parser limits, path containment, and stop semantics.
 - New dependencies are justified, locked, maintained, and checked for advisories and license compatibility.
 - Release artifacts are produced only by the protected tag workflow, signed where required, checksummed, and manually inspected before a draft is published.
 

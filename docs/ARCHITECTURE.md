@@ -5,9 +5,18 @@ QuiverDL separates transfer behavior from presentation:
 ```text
 Desktop UI / future CLI / browser bridge
                   |
-             quiver-core
-        HTTP, state, files, integrity
+         transfer coordination
+          /                \
+Metalink planner       future torrent backend
+          |             separate state/networking
+      quiver-core              (deferred)
+ HTTP(S), state, files, integrity
 ```
+
+The Metalink planner is approved only as a bounded, confirm-before-network adapter that feeds
+validated HTTP(S) mirror requests into `quiver-core`. BitTorrent is not an HTTP source and must not
+share HTTP recovery state or be embedded in this engine. Its implementation remains deferred behind
+the isolation and consent gates in [BITTORRENT_THREAT_MODEL.md](BITTORRENT_THREAT_MODEL.md).
 
 ## Safety invariants
 
@@ -27,3 +36,4 @@ Desktop UI / future CLI / browser bridge
 5. Authenticated native-messaging browser bridge
 6. Explicit proxy routing with operating-system credential storage
 7. Durable scheduled starts and sequential queue coordination
+8. Separate Metalink and BitTorrent threat models and adoption gates

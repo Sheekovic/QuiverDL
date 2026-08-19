@@ -45,6 +45,22 @@ Native messages are length-prefixed and capped at 1 MiB. Requests require a rand
 
 Manual context-menu capture is the default. Automatic interception is opt-in, constrained by minimum size and an optional exact-domain allowlist, and cancels the browser download only after the native host acknowledges the queue request. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; users should treat the local queue and pairing token as private.
 
+### Distributed source metadata
+
+Metalink and BitTorrent are not currently accepted inputs. Their evaluation deliberately keeps
+separate trust boundaries, documented in
+[DISTRIBUTED_SOURCES.md](DISTRIBUTED_SOURCES.md).
+
+A future Metalink implementation may provide HTTP(S) mirror fallback only after bounded XML
+parsing, complete pre-network preview, strong whole-file digest requirements, path containment, and
+the existing HTTP policies are enforced. Metalink metadata and its hashes do not authenticate the
+publisher by themselves. See [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.md).
+
+BitTorrent remains deferred because trackers and peers introduce IP and content-identifier
+disclosure, uploading, untrusted peer-wire input, additional TCP/UDP transports, and multi-file
+filesystem risks that the HTTP engine and proxy settings do not cover. See
+[BITTORRENT_THREAT_MODEL.md](BITTORRENT_THREAT_MODEL.md).
+
 ### Updates, dependencies, and release pipeline
 
 Pull requests run formatting, linting, tests on major desktop platforms, frontend builds, extension syntax checks, and dependency lockfiles. Tag releases require protected-environment signing secrets, Windows Authenticode signing, macOS Developer ID signing/notarization, and checksummed artifacts. Maintainer accounts, GitHub Actions dependencies, certificate authorities, and package registries remain supply-chain dependencies. Branch protection, least-privilege workflow permissions, review, Dependabot, and draft release inspection reduce that risk.
@@ -62,4 +78,5 @@ Retries, redirects, segments, per-host connections, queue length, message size, 
 - Guaranteed recovery when a server changes content without supplying validators
 
 Security assumptions and mitigations must be revisited before adding origin credential forwarding,
-proxy scripting, remote control APIs, automatic updates, or plugin execution.
+proxy scripting, remote control APIs, automatic updates, plugin execution, Metalink parsing, or any
+peer-to-peer transport.
