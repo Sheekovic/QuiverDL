@@ -69,9 +69,11 @@ RFC 5854 allows relative directory components in a file name and explicitly forb
 QuiverDL applies stricter platform-aware containment:
 
 - Treat every name component as untrusted. Reject empty components, `.`, `..`, absolute paths,
-  drive or UNC prefixes, NUL/control characters, alternate separators, colons/alternate-data-stream
-  syntax, components ending in a dot or space, and Windows device names even when followed by an
-  extension.
+  drive or UNC prefixes, NUL/control characters, `/`, `\`, `<`, `>`, `:`, `"`, `|`, `?`, `*`,
+  alternate-data-stream syntax, components ending in a dot or space, and Windows device names even
+  when followed by an extension.
+- Bound every component to at most 240 UTF-8 bytes and 240 UTF-16 code units, the relative depth to
+  32 components, and the encoded relative path to 2,048 bytes/code units before filesystem access.
 - Join only sanitized relative components beneath a destination root chosen after preview.
 - Open and retain the canonical destination-root handle, then traverse and create every component
   relative to trusted directory handles with no-follow/reparse-point rejection. A pre-create path
@@ -141,9 +143,9 @@ rebinding.
 - Bounded parser tests cover malformed XML, entity expansion attempts, per-file and aggregate
   numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
-  trailing-dot/space aliases, alternate data streams, Unicode/case collisions, existing short-name
-  or filesystem aliases, adversarial symlink/reparse-point swaps during creation, and destination
-  no-replace behavior.
+  all Windows-invalid characters, component/path length edges, trailing-dot/space aliases,
+  alternate data streams, Unicode/case collisions, existing short-name or filesystem aliases,
+  adversarial symlink/reparse-point swaps during creation, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
   answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.

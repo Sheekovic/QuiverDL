@@ -40,11 +40,16 @@ peers, or addresses aimed at local services.
 
 - Parse bencoding with explicit limits on source bytes, nesting, collection entries, integer width,
   string length, file count, tracker count, piece count, and decoded total size. Reject non-canonical
-  encodings when computing an info-hash; do not decode and re-encode ambiguous v1 metadata.
+  encodings rather than limiting that check to info-hash calculation. Require raw byte-string keys
+  to be strictly increasing in every metainfo, tracker, and peer-message dictionary, which rejects
+  duplicates at every nesting level. Preview and transfer code consume the same validated typed
+  representation instead of reparsing with different duplicate semantics.
 - Treat names and paths as advisory. Reject absolute paths, traversal, empty components, drive/UNC
-  prefixes, separators inside components, control characters, colons/alternate-data-stream syntax,
-  components ending in a dot or space, Windows device names even with extensions, and normalized or
-  case-folded collisions on every platform.
+  prefixes, control characters, `/`, `\`, `<`, `>`, `:`, `"`, `|`, `?`, `*`,
+  alternate-data-stream syntax, components ending in a dot or space, Windows device names even with
+  extensions, and normalized or case-folded collisions on every platform.
+- Bound every path component to at most 240 UTF-8 bytes and 240 UTF-16 code units, relative depth to
+  32 components, and each encoded relative path to 2,048 bytes/code units before filesystem access.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
 - Retain a trusted root directory handle and perform no-follow, handle-relative traversal and
@@ -129,10 +134,11 @@ Before implementation begins, a proposal must:
    route must be disabled or startup fails closed; user consent does not turn a routing bypass into
    enforcement of the selected privacy policy.
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
-   for malicious messages, per-file and aggregate overflow, recovered-piece tampering, adversarial
-   symlink/reparse-point swaps, trailing-dot/space and alternate-data-stream aliases, scheme
-   rejection, hash failure, cancellation, private torrents, special-use addresses, mixed-address
-   DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
+   for malicious messages, duplicate/unsorted keys at every dictionary layer, per-file and aggregate
+   overflow, recovered-piece tampering, all Windows-invalid characters, component/path length edges,
+   adversarial symlink/reparse-point swaps, trailing-dot/space and alternate-data-stream aliases,
+   scheme rejection, hash failure, cancellation, private torrents, special-use addresses,
+   mixed-address DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 
