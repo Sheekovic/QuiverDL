@@ -45,8 +45,7 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     if let Ok(Some(bytes)) =
         super::persistence::read_bounded_regular_file(&path, MAX_BRIDGE_CONFIG_BYTES).await
         && let Ok(config) = serde_json::from_slice::<BridgeConfig>(&bytes)
-        && config.token.len() == 64
-        && config.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && valid_config(&config, &directory)
     {
         #[cfg(unix)]
         {
@@ -122,6 +121,12 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     Ok((path, config))
 }
 
+fn valid_config(config: &BridgeConfig, directory: &std::path::Path) -> bool {
+    config.token.len() == 64
+        && config.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && config.inbox_dir == directory.join("inbox")
+}
+
 #[tauri::command]
 pub(crate) async fn get_browser_bridge_info() -> Result<BrowserBridgeInfo, String> {
     let (path, config) = ensure_config().await?;
@@ -140,6 +145,11 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("Could not read the browser inbox: {error}")),
     };
+    let rejected_directory = config
+        .inbox_dir
+        .parent()
+        .expect("validated inbox path has a parent")
+        .join("rejected-inbox");
     let mut requests = Vec::new();
     let mut entries_scanned = 0;
     while entries_scanned < MAX_INBOX_ENTRIES_SCANNED && requests.len() < MAX_INBOX_RESULTS {
@@ -153,20 +163,41 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
         entries_scanned += 1;
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
             continue;
         }
         let Ok(Some(bytes)) =
             super::persistence::read_bounded_regular_file(&path, MAX_INBOX_ITEM_BYTES).await
         else {
+            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
             continue;
         };
         let Ok(request) = parse_inbox_item(&path, &bytes) else {
+            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
             continue;
         };
         requests.push(request);
     }
     requests.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(requests)
+}
+
+async fn quarantine_invalid_entry(
+    path: &std::path::Path,
+    rejected_directory: &std::path::Path,
+) -> std::io::Result<()> {
+    tokio::fs::create_dir_all(rejected_directory).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(rejected_directory, std::fs::Permissions::from_mode(0o700))
+            .await?;
+    }
+    let destination = rejected_directory.join(format!(
+        "{}.rejected",
+        hex::encode(rand::random::<[u8; 16]>())
+    ));
+    tokio::fs::rename(path, destination).await
 }
 
 fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInboxItem, String> {
@@ -210,7 +241,7 @@ pub(crate) async fn acknowledge_browser_request(id: String) -> Result<(), String
 mod tests {
     use std::path::Path;
 
-    use super::parse_inbox_item;
+    use super::{BridgeConfig, parse_inbox_item, quarantine_invalid_entry, valid_config};
 
     #[test]
     fn accepts_the_native_host_inbox_contract() {
@@ -233,6 +264,48 @@ mod tests {
                 br#"{"version":1,"id":"80cf859d-fac7-4ec2-a5e2-63a3242c9776","url":"https://example.test/file.zip"}"#
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn bridge_config_requires_the_native_host_inbox_contract() {
+        let directory = Path::new("C:/fixture/QuiverDL");
+        let valid = BridgeConfig {
+            token: "ab".repeat(32),
+            inbox_dir: directory.join("inbox"),
+        };
+        assert!(valid_config(&valid, directory));
+        assert!(!valid_config(
+            &BridgeConfig {
+                inbox_dir: directory.join("elsewhere"),
+                ..valid
+            },
+            directory
+        ));
+    }
+
+    #[tokio::test]
+    async fn quarantining_an_invalid_entry_advances_the_live_inbox() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let inbox = directory.path().join("inbox");
+        let rejected = directory.path().join("rejected-inbox");
+        tokio::fs::create_dir(&inbox)
+            .await
+            .expect("inbox directory");
+        let invalid = inbox.join("malformed.json");
+        tokio::fs::write(&invalid, b"invalid")
+            .await
+            .expect("invalid entry");
+
+        quarantine_invalid_entry(&invalid, &rejected)
+            .await
+            .expect("invalid entry should be quarantined");
+        assert!(!tokio::fs::try_exists(invalid).await.expect("inspect inbox"));
+        assert_eq!(
+            std::fs::read_dir(rejected)
+                .expect("rejected directory")
+                .count(),
+            1
         );
     }
 }
