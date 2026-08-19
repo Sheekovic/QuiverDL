@@ -74,10 +74,14 @@ peers, or addresses aimed at local services.
 - For a local `.torrent` file, present the full file tree and exact selected byte total before
   allocation or network discovery.
 - Magnet URIs may be parsed and displayed offline but cannot resolve metadata or enter the transfer
-  queue in the first networked backend. Because the private flag is unavailable before metadata
-  retrieval, DHT, peer exchange, or public tracker discovery could disclose a private torrent too
-  early. Magnet networking requires a later, separate threat model; private magnets remain
-  unsupported until privacy can be established before discovery.
+  queue in the first networked backend. Reject an encoded URI above 16 KiB, more than 128 query
+  parameters, a decoded key above 64 bytes, or a decoded value above 4 KiB. Accept at most eight
+  exact-topic values, 32 tracker values, and 32 web-seed values; reject malformed percent encoding,
+  invalid UTF-8 text fields, and duplicate key/value pairs. Perform checked decoding into bounded
+  buffers and add deterministic boundary tests. Because the private flag is unavailable before
+  metadata retrieval, DHT, peer exchange, or public tracker discovery could disclose a private
+  torrent too early. Magnet networking requires a later, separate threat model; private magnets
+  remain unsupported until privacy can be established before discovery.
 - Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
   accounted for and removed safely.
 
@@ -102,12 +106,13 @@ bytes without promoting them.
 
 ## Network, privacy, and consent requirements
 
-- Before any network discovery, an initial confirmation must explain that the user's IP address and
-  torrent identifier can be visible, that downloading normally uploads pieces, which trackers and
-  discovery mechanisms will run, and when network activity will stop.
-- No tracker contact, DNS lookup, DHT lookup, local discovery, peer connection, listener, or port
-  mapping occurs before confirmation. Browser interception for `.torrent` and magnet links remains
-  disabled until a separate reviewed integration milestone.
+- Before any network discovery or content request, an initial confirmation must explain that the
+  user's IP address and torrent identifier can be visible, that downloading normally uploads pieces,
+  which trackers and discovery mechanisms will run, the sanitized origin of every web seed, and when
+  network activity will stop.
+- No tracker or web-seed contact, DNS lookup, DHT lookup, local discovery, peer connection, listener,
+  port mapping, or content request occurs before confirmation. Browser interception for `.torrent`
+  and magnet links remains disabled until a separate reviewed integration milestone.
 - The first networked backend accepts only HTTPS tracker URLs, optional HTTPS web-seed URLs, and
   outbound TCP peer connections learned from an approved tracker. Reject HTTP, FTP, file,
   WebSocket, UDP tracker, uTP, and every unknown or unreviewed scheme/transport before dispatch.
@@ -125,11 +130,11 @@ bytes without promoting them.
   and seeding after completion are individually modeled features, not implicit defaults.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
   rate, download rate, and share duration are bounded globally and per torrent.
-- Tracker URLs and magnets may contain private passkeys. Redact both from errors and logs, never
+- Tracker, web-seed, and magnet URLs may contain private passkeys. Redact them from errors and logs, never
   include them in public diagnostics, and do not persist an offline-inspected magnet. The
-  confirmation UI displays only a sanitized tracker identity (scheme and host, plus a non-default
-  port); it strips userinfo, path, query, and fragment so passkeys cannot appear on screen or in
-  screenshots. Store full tracker URLs only in protected local state.
+  confirmation UI displays only a sanitized tracker or web-seed identity (scheme and host, plus a
+  non-default port); it strips userinfo, path, query, and fragment so passkeys cannot appear on screen
+  or in screenshots. Store full tracker and web-seed URLs only in protected local state.
 - Private torrents must follow [BEP 27](https://www.bittorrent.org/beps/bep_0027.html): contact only
   the private tracker and peers it returns, with DHT, peer exchange, and local discovery disabled.
 - Pause and quit semantics must say whether announcing, uploading, and listeners stop. **Stopped**
