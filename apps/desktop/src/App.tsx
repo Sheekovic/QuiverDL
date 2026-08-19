@@ -458,45 +458,50 @@ function App() {
       totalBytes: null,
       recoverable: false,
     };
-    if (browserRequestId) {
-      setDownloads((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
-      setFilter("all");
-      const { recoverable: _recoverable, ...storedItem } = item;
-      const currentSnapshot = latestSnapshot.current ?? {
-        schemaVersion: 1,
-        settings,
-        downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
-          ...download,
-          downloadedBytes: download.downloadedBytes.toString(),
-          totalBytes: download.totalBytes?.toString() ?? null,
-        })),
-      };
-      const snapshot: AppSnapshot = {
-        schemaVersion: 1,
-        settings,
-        downloads: [
-          {
-            ...storedItem,
-            downloadedBytes: storedItem.downloadedBytes.toString(),
-            totalBytes: storedItem.totalBytes?.toString() ?? null,
-          },
-          ...currentSnapshot.downloads.filter((download) => download.id !== item.id),
-        ],
-      };
-      try {
-        await persistSnapshotNow(snapshot);
-      } catch (cause) {
+    setDownloads((current) =>
+      existingId
+        ? current.map((existing) => (existing.id === existingId ? item : existing))
+        : [item, ...current],
+    );
+    setFilter("all");
+    const { recoverable: _recoverable, ...storedItem } = item;
+    const storedStartingItem: StoredDownload = {
+      ...storedItem,
+      downloadedBytes: storedItem.downloadedBytes.toString(),
+      totalBytes: storedItem.totalBytes?.toString() ?? null,
+    };
+    const currentSnapshot = latestSnapshot.current ?? {
+      schemaVersion: 1,
+      settings,
+      downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
+        ...download,
+        downloadedBytes: download.downloadedBytes.toString(),
+        totalBytes: download.totalBytes?.toString() ?? null,
+      })),
+    };
+    const snapshot: AppSnapshot = {
+      schemaVersion: 1,
+      settings,
+      downloads: currentSnapshot.downloads.some((download) => download.id === item.id)
+        ? currentSnapshot.downloads.map((download) =>
+            download.id === item.id ? storedStartingItem : download,
+          )
+        : [storedStartingItem, ...currentSnapshot.downloads],
+    };
+    try {
+      await persistSnapshotNow(snapshot);
+    } catch (cause) {
+      if (browserRequestId) {
         setDownloads((current) => current.filter((existing) => existing.id !== item.id));
         setError(`Could not durably queue the browser download: ${String(cause)}`);
-        return;
+      } else {
+        updateDownload(item.id, {
+          status: "failed",
+          error: `Could not durably queue the download: ${String(cause)}`,
+        });
+        setError(`Could not durably queue the download: ${String(cause)}`);
       }
-    } else {
-      setDownloads((current) =>
-        existingId
-          ? current.map((existing) => (existing.id === existingId ? item : existing))
-          : [item, ...current],
-      );
-      setFilter("all");
+      return;
     }
 
     if (browserRequestId) {
