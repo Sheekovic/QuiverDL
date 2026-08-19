@@ -62,6 +62,11 @@ peers, or addresses aimed at local services.
   32 components, and each encoded relative path to 2,048 bytes/code units before filesystem access.
 - Reject duplicate normalized paths and any file path that is a strict component-prefix of another
   file path before allocation or reservation.
+- Before allocation, derive every destination, partial, state, temporary, merge, and piece-staging
+  path for the complete selection. Apply the same platform-aware normalization and alias checks to
+  this combined namespace, reject any destination/artifact or artifact/artifact intersection, and
+  reserve the entire namespace for the batch so a name such as `video.quiver-part` cannot alias
+  another file's recovery path.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
 - Retain a trusted root directory handle and perform no-follow, handle-relative traversal and
