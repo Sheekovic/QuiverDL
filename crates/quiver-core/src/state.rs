@@ -4,9 +4,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::Result;
+use crate::{Error, Result};
+
+const MAX_PARTIAL_STATE_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PartialState {
@@ -14,6 +16,8 @@ pub(crate) struct PartialState {
     pub total_bytes: Option<u64>,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default)]
+    pub segment_ranges: Vec<[u64; 2]>,
 }
 
 pub(crate) fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -23,26 +27,158 @@ pub(crate) fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 pub(crate) async fn load(path: &Path) -> Result<Option<PartialState>> {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+    let file = match open_regular_file_for_read(path).await {
+        Ok(file) => file,
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let length = file.metadata().await?.len();
+    if length > MAX_PARTIAL_STATE_BYTES {
+        return Err(Error::InvalidResponse("partial state is too large".into()));
     }
+    let mut bytes = Vec::with_capacity(length as usize);
+    file.take(MAX_PARTIAL_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > MAX_PARTIAL_STATE_BYTES {
+        return Err(Error::InvalidResponse("partial state is too large".into()));
+    }
+    Ok(Some(serde_json::from_slice(&bytes)?))
 }
 
 pub(crate) async fn save(path: &Path, state: &PartialState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state)?;
+    if bytes.len() as u64 > MAX_PARTIAL_STATE_BYTES {
+        return Err(Error::InvalidResponse("partial state is too large".into()));
+    }
     let temporary = sibling_with_suffix(path, ".tmp");
-    let mut file = tokio::fs::File::create(&temporary).await?;
+    let mut file = open_regular_file(&temporary, false, true).await?;
     file.write_all(&bytes).await?;
     file.sync_all().await?;
     drop(file);
 
-    if tokio::fs::try_exists(path).await? {
-        tokio::fs::remove_file(path).await?;
-    }
-    tokio::fs::rename(temporary, path).await?;
+    let destination = path.to_path_buf();
+    tokio::task::spawn_blocking(move || atomic_replace(&temporary, &destination))
+        .await
+        .map_err(std::io::Error::other)??;
     Ok(())
+}
+
+pub(crate) async fn open_regular_file(
+    path: &Path,
+    append: bool,
+    truncate: bool,
+) -> Result<tokio::fs::File> {
+    if truncate {
+        match tokio::fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).append(append);
+    if truncate {
+        options.create_new(true);
+    } else {
+        options.create(true);
+    }
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
+    validate_recovery_handle(&file, path).await?;
+    Ok(file)
+}
+
+async fn validate_recovery_handle(file: &tokio::fs::File, path: &Path) -> Result<()> {
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() || !has_single_link(file, &metadata)? {
+        return Err(Error::InvalidResponse(format!(
+            "recovery path is not an exclusively linked regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) async fn open_regular_file_for_read(path: &Path) -> Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
+    validate_recovery_handle(&file, path).await?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn has_single_link(_file: &tokio::fs::File, metadata: &std::fs::Metadata) -> Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(metadata.nlink() == 1)
+}
+
+#[cfg(windows)]
+fn has_single_link(file: &tokio::fs::File, _metadata: &std::fs::Metadata) -> Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    let result = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(information.nNumberOfLinks == 1)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn has_single_link(_file: &tokio::fs::File, _metadata: &std::fs::Metadata) -> Result<bool> {
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)?;
+    let parent = destination.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "state destination has no parent directory",
+        )
+    })?;
+    std::fs::File::open(parent)?.sync_all()
 }
 
 #[cfg(test)]
@@ -67,6 +203,7 @@ mod tests {
             total_bytes: Some(42),
             etag: Some("fixture".into()),
             last_modified: None,
+            segment_ranges: vec![[0, 20], [21, 41]],
         };
 
         save(&path, &expected).await.expect("state should save");
@@ -77,5 +214,43 @@ mod tests {
         assert_eq!(actual.url, expected.url);
         assert_eq!(actual.total_bytes, expected.total_bytes);
         assert_eq!(actual.etag, expected.etag);
+        assert_eq!(actual.segment_ranges, expected.segment_ranges);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_follow_read_rejects_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let link = directory.path().join("segment");
+        tokio::fs::write(&target, b"fixture")
+            .await
+            .expect("target should write");
+        symlink(&target, &link).expect("symlink should be created");
+        assert!(super::open_regular_file_for_read(&link).await.is_err());
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"fixture"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_handles_reject_hard_links() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("unrelated");
+        let link = directory.path().join("segment");
+        tokio::fs::write(&target, b"preserve me")
+            .await
+            .expect("target should write");
+        std::fs::hard_link(&target, &link).expect("hard link should be created");
+
+        assert!(super::open_regular_file_for_read(&link).await.is_err());
+        assert!(super::open_regular_file(&link, true, false).await.is_err());
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"preserve me"
+        );
     }
 }

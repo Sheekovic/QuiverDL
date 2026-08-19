@@ -7,16 +7,44 @@ use std::{
 };
 
 use quiver_core::{
-    DownloadControl, DownloadEngine, DownloadRequest, DownloadStatus, ProgressEvent,
+    BandwidthLimiter, DownloadControl, DownloadEngine, DownloadRequest, DownloadStatus,
+    HostConnectionPolicy, ProgressEvent, RetryPolicy, TransferPolicy,
 };
 use serde::Serialize;
-use tauri::{State, ipc::Channel};
+use tauri::{
+    AppHandle, Emitter, Manager, State, WindowEvent,
+    ipc::Channel,
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+};
 use tokio::sync::mpsc;
 use url::Url;
 
-#[derive(Default)]
+mod browser_bridge;
+mod persistence;
+
+use browser_bridge::{acknowledge_browser_request, get_browser_bridge_info, list_browser_requests};
+use persistence::{AppSettings, PersistentStore, load_app_state, save_app_state};
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 struct TransferRegistry {
     transfers: Mutex<HashMap<String, ActiveTransfer>>,
+    global_limiter: BandwidthLimiter,
+    host_policy: HostConnectionPolicy,
+}
+
+impl Default for TransferRegistry {
+    fn default() -> Self {
+        Self {
+            transfers: Mutex::default(),
+            global_limiter: BandwidthLimiter::unlimited(),
+            host_policy: HostConnectionPolicy::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -37,6 +65,7 @@ struct LinkInspection {
     total_bytes: Option<String>,
     supports_ranges: bool,
     has_validator: bool,
+    suggested_filename: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -79,6 +108,7 @@ async fn inspect_url(url: String) -> Result<LinkInspection, String> {
         total_bytes: probe.total_bytes.map(|bytes| bytes.to_string()),
         supports_ranges: probe.supports_ranges,
         has_validator: probe.etag.is_some() || probe.last_modified.is_some(),
+        suggested_filename: sanitize_filename(probe.suggested_filename.as_deref()),
     })
 }
 
@@ -88,13 +118,30 @@ async fn start_download(
     task_id: String,
     url: String,
     destination: String,
+    settings: Option<AppSettings>,
     on_event: Channel<DownloadProgress>,
 ) -> Result<DownloadSummary, String> {
     let task_id = validate_task_id(&task_id)?;
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
     let destination = prepare_destination(&destination).await?;
-    let engine = DownloadEngine::new().map_err(|error| error.to_string())?;
-    let request = DownloadRequest::new(url, &destination.path);
+    let settings = settings.unwrap_or_default();
+    settings.validate()?;
+    let engine = DownloadEngine::new()
+        .map_err(|error| error.to_string())?
+        .with_global_limiter(Some(registry.global_limiter.clone()))
+        .with_host_policy(registry.host_policy.clone());
+    let mut request = DownloadRequest::new(url, &destination.path);
+    request.retry_policy = RetryPolicy {
+        max_attempts: settings.retry_attempts,
+        initial_delay_ms: settings.retry_initial_delay_ms,
+        max_delay_ms: settings.retry_max_delay_ms,
+    };
+    request.transfer_policy = TransferPolicy {
+        max_segments: settings.max_segments,
+        max_connections_per_host: settings.max_connections_per_host,
+        min_segment_bytes: 8 * 1024 * 1024,
+        per_download_speed_limit_bps: settings.per_download_speed_limit_bps,
+    };
     let control = DownloadControl::new();
 
     {
@@ -128,11 +175,11 @@ async fn start_download(
     let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
         let mut last_download_progress = Instant::now()
-            .checked_sub(Duration::from_millis(100))
+            .checked_sub(Duration::from_millis(250))
             .unwrap_or_else(Instant::now);
         while let Some(event) = progress_rx.recv().await {
             if event.status == DownloadStatus::Downloading
-                && last_download_progress.elapsed() < Duration::from_millis(100)
+                && last_download_progress.elapsed() < Duration::from_millis(250)
             {
                 continue;
             }
@@ -183,6 +230,20 @@ fn control_download(
         "cancel" => control.cancel(),
         _ => return Err("Unsupported download action".into()),
     }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_global_speed_limit(
+    registry: State<'_, TransferRegistry>,
+    bytes_per_second: Option<u64>,
+) -> Result<(), String> {
+    if bytes_per_second.is_some_and(|limit| !(1024..=1024_u64.pow(4)).contains(&limit)) {
+        return Err("Global speed limit must be between 1 KiB/s and 1 TiB/s".into());
+    }
+    registry
+        .global_limiter
+        .set_bytes_per_second(bytes_per_second.unwrap_or(0));
     Ok(())
 }
 
@@ -278,7 +339,9 @@ fn destination_reservation_keys(path: &Path) -> HashSet<String> {
     let partial = sibling_with_suffix(path, ".quiver-part");
     let state = sibling_with_suffix(path, ".quiver.json");
     let state_temporary = sibling_with_suffix(&state, ".tmp");
-    [path.to_path_buf(), partial, state, state_temporary]
+    let mut paths = vec![path.to_path_buf(), partial.clone(), state, state_temporary];
+    paths.extend((0..16).map(|index| sibling_with_suffix(&partial, &format!(".segment-{index}"))));
+    paths
         .into_iter()
         .map(|path| destination_lock_key(&path))
         .collect()
@@ -290,16 +353,94 @@ fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+fn sanitize_filename(value: Option<&str>) -> String {
+    let value = value.unwrap_or("download.bin");
+    let mut sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .take(180)
+        .collect();
+    while sanitized.ends_with(['.', ' ']) {
+        sanitized.pop();
+    }
+    if sanitized.is_empty() || matches!(sanitized.as_str(), "." | "..") {
+        "download.bin".into()
+    } else {
+        sanitized
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _working_directory| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .manage(TransferRegistry::default())
+        .setup(|app| {
+            let app_data_dir = app.path().app_data_dir()?;
+            app.manage(PersistentStore::new(&app_data_dir));
+            let show = MenuItem::with_id(app, "show", "Show QuiverDL", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let mut tray =
+                TrayIconBuilder::new()
+                    .menu(&menu)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.emit("quit-requested", ());
+                            }
+                        }
+                        _ => {}
+                    });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             inspect_url,
             start_download,
-            control_download
+            control_download,
+            set_global_speed_limit,
+            load_app_state,
+            save_app_state,
+            get_browser_bridge_info,
+            list_browser_requests,
+            acknowledge_browser_request,
+            quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -309,7 +450,10 @@ pub fn run() {
 mod tests {
     use quiver_core::DownloadStatus;
 
-    use super::{DownloadProgress, prepare_destination, validate_destination, validate_task_id};
+    use super::{
+        DownloadProgress, prepare_destination, sanitize_filename, validate_destination,
+        validate_task_id,
+    };
 
     #[test]
     fn validates_download_identifiers() {
@@ -397,5 +541,15 @@ mod tests {
             value["totalBytes"],
             serde_json::Value::String(u64::MAX.to_string())
         );
+    }
+
+    #[test]
+    fn sanitizes_untrusted_server_filenames() {
+        assert_eq!(
+            sanitize_filename(Some("../bad<name>.zip")),
+            ".._bad_name_.zip"
+        );
+        assert_eq!(sanitize_filename(Some("...   ")), "download.bin");
+        assert_eq!(sanitize_filename(None), "download.bin");
     }
 }

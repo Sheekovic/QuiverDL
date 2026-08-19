@@ -42,8 +42,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Run core tests
-        run: cargo test -p quiver-core
+      - name: Run engine and browser bridge tests
+        run: cargo test -p quiver-core -p quiver-native-host
 
   frontend:
     name: Frontend build
@@ -60,6 +60,17 @@ jobs:
           cache-dependency-path: apps/desktop/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Validate extension scripts and manifests
+        run: |
+          node --check ../../extensions/chromium/background.js
+          node --check ../../extensions/chromium/options.js
+          node --check ../../extensions/firefox/background.js
+          node --check ../../extensions/firefox/options.js
+          node ../../extensions/test-background-policy.mjs
+          node -e "for (const file of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(file, 'utf8'))" ../../extensions/chromium/manifest.json ../../extensions/firefox/manifest.json ../../extensions/native-host/chromium-host.json ../../extensions/native-host/firefox-host.json
+          sh -n ../../extensions/native-host/install-linux.sh
+          sh -n ../../extensions/native-host/install-macos.sh
+          ../../extensions/native-host/test-installers.sh
 
   desktop-check:
     name: Desktop Rust check
@@ -74,6 +85,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
         working-directory: apps/desktop
+      - name: Test Windows native host installer
+        shell: powershell
+        run: .\extensions\native-host\test-install-windows.ps1
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
