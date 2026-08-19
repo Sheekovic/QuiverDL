@@ -308,6 +308,38 @@ async fn rejects_a_short_unknown_length_resume_span() {
 }
 
 #[tokio::test]
+async fn rejects_full_response_bytes_beyond_the_probed_size_before_writing_them() {
+    let (url, server) = oversized_full_response_server().await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let destination = directory.path().join("oversized.bin");
+    let partial = directory.path().join("oversized.bin.quiver-part");
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
+
+    let error = DownloadEngine::new()
+        .expect("engine should initialize")
+        .download(
+            DownloadRequest::new(url, destination),
+            DownloadControl::new(),
+            progress_tx,
+        )
+        .await
+        .expect_err("a full response larger than the probe must be rejected");
+
+    assert!(error.to_string().contains("exceeded its declared"));
+    assert!(
+        tokio::fs::metadata(partial)
+            .await
+            .expect("partial should remain recoverable")
+            .len()
+            <= FIXTURE.len() as u64
+    );
+    server
+        .await
+        .expect("oversized fixture server should finish");
+}
+
+#[tokio::test]
 async fn cancellation_interrupts_a_stalled_response() {
     let (url, server, started, release) = stalled_fixture_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -678,6 +710,46 @@ async fn short_unknown_length_resume_server() -> (Url, tokio::task::JoinHandle<(
 
     (
         Url::parse(&format!("http://{address}/fixture.bin")).expect("fixture URL"),
+        task,
+    )
+}
+
+async fn oversized_full_response_server() -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("fixture server should bind");
+    let address = listener.local_addr().expect("fixture address");
+    let task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            let response = if request.contains("range: bytes=0-0") {
+                let headers = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/{}\r\nAccept-Ranges: bytes\r\nETag: oversized-v1\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len()
+                );
+                [headers.as_bytes(), &FIXTURE[..1]].concat()
+            } else {
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: oversized-v1\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len() + 1
+                );
+                [headers.as_bytes(), FIXTURE, b"X"].concat()
+            };
+            socket
+                .write_all(&response)
+                .await
+                .expect("response should write");
+            socket.shutdown().await.expect("socket should close");
+        }
+    });
+    (
+        Url::parse(&format!("http://{address}/oversized.bin")).expect("fixture URL"),
         task,
     )
 }

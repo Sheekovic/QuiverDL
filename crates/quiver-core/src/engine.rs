@@ -301,6 +301,15 @@ impl DownloadEngine {
         let mut file = state::open_regular_file(&partial_path, offset > 0, offset == 0).await?;
         let mut downloaded = offset;
         let resumed = offset > 0;
+        let expected_end = resume_range
+            .as_ref()
+            .map(|range| {
+                range.end.checked_add(1).ok_or_else(|| {
+                    Error::InvalidResponse("resume response range overflowed u64".into())
+                })
+            })
+            .transpose()?
+            .or(probe.total_bytes);
         emit(
             &progress,
             &request,
@@ -321,6 +330,18 @@ impl DownloadEngine {
                 break;
             };
             let chunk = chunk?;
+            let chunk_bytes = u64::try_from(chunk.len())
+                .map_err(|_| Error::InvalidResponse("download chunk size overflowed u64".into()))?;
+            let next_downloaded = downloaded
+                .checked_add(chunk_bytes)
+                .ok_or_else(|| Error::InvalidResponse("download size overflowed u64".into()))?;
+            if let Some(limit) = expected_end
+                && next_downloaded > limit
+            {
+                return Err(Error::InvalidResponse(format!(
+                    "download body exceeded its declared {limit}-byte end"
+                )));
+            }
             throttle(
                 chunk.len(),
                 download_limiter.as_ref(),
@@ -329,9 +350,7 @@ impl DownloadEngine {
             )
             .await?;
             file.write_all(&chunk).await?;
-            downloaded = downloaded
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| Error::InvalidResponse("download size overflowed u64".into()))?;
+            downloaded = next_downloaded;
             emit(
                 &progress,
                 &request,
@@ -346,17 +365,14 @@ impl DownloadEngine {
         drop(file);
         control.checkpoint().await?;
 
-        if let Some(range) = resume_range {
-            let expected_end = range.end.checked_add(1).ok_or_else(|| {
-                Error::InvalidResponse("resume response range overflowed u64".into())
-            })?;
-            if downloaded != expected_end {
-                return Err(Error::InvalidResponse(format!(
-                    "resume response ended at byte {} but received through byte {}",
-                    range.end,
-                    downloaded.saturating_sub(1)
-                )));
-            }
+        if let Some(range) = resume_range
+            && downloaded != expected_end.expect("a validated resume range has a known end")
+        {
+            return Err(Error::InvalidResponse(format!(
+                "resume response ended at byte {} but received through byte {}",
+                range.end,
+                downloaded.saturating_sub(1)
+            )));
         }
 
         if let Some(total) = probe.total_bytes
