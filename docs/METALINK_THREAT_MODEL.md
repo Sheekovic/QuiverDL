@@ -75,8 +75,14 @@ QuiverDL applies stricter platform-aware containment:
   requests to listed mirrors.
 - Only HTTP and HTTPS mirrors are eligible. HTTPS is preferred; use of an HTTP mirror requires the
   same explicit insecure-transport warning used for a direct HTTP download.
-- Apply the existing redirect, retry, per-host connection, global connection, proxy, speed, and
-  cancellation policies independently to every mirror.
+- Apply the existing retry, per-host connection, global connection, proxy, speed, cancellation, and
+  redirect-count policies independently to every mirror. Metalink support must additionally resolve
+  and classify the initial target and every redirect target before connecting; the current
+  scheme-only redirect validation is not sufficient for this feature.
+- A mirror confirmed as public cannot redirect to loopback, link-local, private, or otherwise local
+  addresses without a second explicit confirmation. Mixed public/private DNS answers fail closed.
+  Resolution and the actual socket destination must remain bound to the approved address class so a
+  DNS change cannot bypass the decision.
 - Never copy request credentials or private headers between mirror origins. Stored proxy
   credentials remain inside the existing backend boundary and are not exposed to Metalink data.
 - Prevent mirror and metadata loops. Bound attempted mirrors and do not retry a failed mirror
@@ -108,7 +114,8 @@ agent for internal services. DNS results must be revalidated on every connection
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
   Unicode/case collisions, symlink races, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
-  cancellation, proxy routing, resume policy, and failure without public-internet access.
+  cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
+  answers, DNS rebinding, and failure without public-internet access.
 - The persistent schema records the confirmed metadata identity, selected paths, expected sizes and
   hashes, and per-file state atomically.
 - UI review covers keyboard access, RTL layout, adaptive themes, warnings, and complete pre-network
