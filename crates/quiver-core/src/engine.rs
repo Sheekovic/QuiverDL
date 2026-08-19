@@ -448,15 +448,54 @@ async fn promote_partial(partial: &Path, destination: &Path, overwrite: bool) ->
         return Ok(());
     }
 
-    match tokio::fs::hard_link(partial, destination).await {
-        Ok(()) => {
-            tokio::fs::remove_file(partial).await?;
-            Ok(())
-        }
+    match atomic_rename_noreplace(partial, destination) {
+        Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(Error::DestinationExists(destination.to_path_buf()))
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
+fn atomic_rename_noreplace(partial: &Path, destination: &Path) -> std::io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+
+    renameat_with(CWD, partial, CWD, destination, RenameFlags::NOREPLACE).map_err(Into::into)
+}
+
+#[cfg(windows)]
+fn atomic_rename_noreplace(partial: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    let partial: Vec<u16> = partial.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe { MoveFileExW(partial.as_ptr(), destination.as_ptr(), 0) };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+)))]
+fn atomic_rename_noreplace(partial: &Path, destination: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(partial, destination) {
+        Ok(()) => {
+            std::fs::remove_file(partial)?;
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
 }
 
