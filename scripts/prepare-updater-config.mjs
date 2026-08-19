@@ -18,7 +18,7 @@ function decodeCanonicalBase64(value, label) {
   return decoded;
 }
 
-export function validateUpdaterPublicKey(value) {
+export function parseUpdaterPublicKey(value) {
   const publicKey = value.trim();
 
   if (publicKey.length < 32 || publicKey.length > 8 * 1024) {
@@ -52,7 +52,15 @@ export function validateUpdaterPublicKey(value) {
     throw new Error("TAURI_UPDATER_PUBLIC_KEY contains an invalid all-zero Ed25519 key");
   }
 
-  return publicKey;
+  return {
+    keyBytes: keyPacket.subarray(10),
+    keyId: keyPacket.subarray(2, 10).toString("hex"),
+    publicKey,
+  };
+}
+
+export function validateUpdaterPublicKey(value) {
+  return parseUpdaterPublicKey(value).publicKey;
 }
 
 export async function prepareUpdaterConfig({

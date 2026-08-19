@@ -34,16 +34,20 @@ receive the public/private key pair or enable the updater.
 
 `scripts/generate-update-manifest.mjs` accepts exactly the four supported platform artifacts, parses
 each sibling `.sig` as a canonical Tauri Minisign signature, and emits deterministic Tauri static
-JSON. It requires distinct signed-input identities and signatures from one key identifier across all
-platforms. It rejects symlinks, empty or oversized artifacts/signatures, unexpected platforms,
-unsafe filenames, non-SemVer versions, tag mismatches, credentials, HTTP, query strings, fragments,
-duplicate platform paths/URLs, existing or artifact-aliased output paths, and any release URL outside
-this repository. Stable manifests reject prerelease versions until a separately named, tested, and
-published prerelease channel exists.
+JSON. It requires the same `TAURI_UPDATER_PUBLIC_KEY` used by the app, streams every artifact through
+BLAKE2b-512, and cryptographically verifies both its Ed25519 artifact signature and trusted-comment
+signature before writing a manifest. Modern prehashed `ED` packets are mandatory so verification
+remains memory-bounded. It also requires distinct signed-input identities and signatures from the
+configured key identifier across all platforms. It rejects symlinks, empty or oversized
+artifacts/signatures, unexpected platforms, unsafe filenames, non-SemVer versions, tag mismatches,
+credentials, HTTP, query strings, fragments, duplicate platform paths/URLs, existing or
+artifact-aliased output paths, and any release URL outside this repository. Stable manifests reject
+prerelease versions until a separately named, tested, and published prerelease channel exists.
 
 Example after all signed artifacts have reached draft release `v0.2.0`:
 
 ```powershell
+$env:TAURI_UPDATER_PUBLIC_KEY = (Get-Content C:\secure\quiverdl-updater.key.pub -Raw).Trim()
 node scripts/generate-update-manifest.mjs `
   --version 0.2.0 `
   --base-url https://github.com/Sheekovic/QuiverDL/releases/download/v0.2.0 `

@@ -1,6 +1,10 @@
+import { createHash, createPublicKey, verify } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { link, lstat, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { parseUpdaterPublicKey } from "./prepare-updater-config.mjs";
 
 const SUPPORTED_PLATFORMS = [
   "darwin-aarch64",
@@ -51,10 +55,10 @@ export function validateUpdaterSignature(value, platform) {
   const algorithm = signaturePacket.subarray(0, 2).toString("ascii");
   if (
     signaturePacket.length !== 74 ||
-    !["Ed", "ED"].includes(algorithm) ||
+    algorithm !== "ED" ||
     globalSignature.length !== 64
   ) {
-    throw new Error(`${platform}: signature contains an unsupported Minisign packet`);
+    throw new Error(`${platform}: signature must use a prehashed Minisign ED packet`);
   }
   if (
     signaturePacket.subarray(10).every((byte) => byte === 0) ||
@@ -64,9 +68,47 @@ export function validateUpdaterSignature(value, platform) {
   }
 
   return {
+    globalSignature,
     keyId: signaturePacket.subarray(2, 10).toString("hex"),
+    signatureBytes: signaturePacket.subarray(10),
     signature,
+    trustedComment: lines[2].slice("trusted comment: ".length),
   };
+}
+
+function createEd25519PublicKey(keyBytes) {
+  const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+  return createPublicKey({
+    format: "der",
+    key: Buffer.concat([spkiPrefix, keyBytes]),
+    type: "spki",
+  });
+}
+
+async function hashArtifact(artifactPath) {
+  const hash = createHash("blake2b512");
+  for await (const chunk of createReadStream(artifactPath)) {
+    hash.update(chunk);
+  }
+  return hash.digest();
+}
+
+async function verifyUpdaterSignature(platform, artifactPath, signature, updaterKey) {
+  if (signature.keyId !== updaterKey.keyId) {
+    throw new Error(`${platform}: signature key identifier does not match the configured updater key`);
+  }
+  const publicKey = createEd25519PublicKey(updaterKey.keyBytes);
+  const digest = await hashArtifact(artifactPath);
+  if (!verify(null, digest, publicKey, signature.signatureBytes)) {
+    throw new Error(`${platform}: updater signature does not authenticate the artifact`);
+  }
+  const globalMessage = Buffer.concat([
+    signature.signatureBytes,
+    Buffer.from(signature.trustedComment, "utf8"),
+  ]);
+  if (!verify(null, globalMessage, publicKey, signature.globalSignature)) {
+    throw new Error(`${platform}: updater global signature does not authenticate its trusted comment`);
+  }
 }
 
 function parseVersion(version) {
@@ -100,7 +142,7 @@ function validateBaseUrl(value, version) {
   return url.href.replace(/\/$/, "");
 }
 
-async function platformEntry(platform, artifactPath, baseUrl) {
+async function platformEntry(platform, artifactPath, baseUrl, updaterKey) {
   const info = await lstat(artifactPath);
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error(`${platform}: updater artifact must be a regular non-symlink file`);
@@ -124,6 +166,7 @@ async function platformEntry(platform, artifactPath, baseUrl) {
     await readFile(signaturePath, "utf8"),
     platform,
   );
+  await verifyUpdaterSignature(platform, artifactPath, validatedSignature, updaterKey);
   return {
     entry: {
       signature: validatedSignature.signature,
@@ -133,9 +176,10 @@ async function platformEntry(platform, artifactPath, baseUrl) {
   };
 }
 
-export async function generateManifest({ version, baseUrl, artifacts }) {
+export async function generateManifest({ version, baseUrl, artifacts, publicKey }) {
   parseVersion(version);
   const canonicalBaseUrl = validateBaseUrl(baseUrl, version);
+  const updaterKey = parseUpdaterPublicKey(publicKey ?? "");
   const keys = Object.keys(artifacts).sort();
   if (keys.join("\n") !== SUPPORTED_PLATFORMS.join("\n")) {
     throw new Error(`Artifacts must include exactly: ${SUPPORTED_PLATFORMS.join(", ")}`);
@@ -168,7 +212,12 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   const signatures = new Set();
   const signingKeyIds = new Set();
   for (const platform of SUPPORTED_PLATFORMS) {
-    const validated = await platformEntry(platform, artifacts[platform], canonicalBaseUrl);
+    const validated = await platformEntry(
+      platform,
+      artifacts[platform],
+      canonicalBaseUrl,
+      updaterKey,
+    );
     platforms[platform] = validated.entry;
     signingKeyIds.add(validated.keyId);
     if (urls.has(platforms[platform].url)) {
@@ -251,6 +300,10 @@ async function main() {
   const refName = process.env.GITHUB_REF_NAME;
   if (refName && refName !== `v${options.version}`) {
     throw new Error(`Release tag ${refName} does not match manifest version v${options.version}`);
+  }
+  options.publicKey = process.env.TAURI_UPDATER_PUBLIC_KEY ?? "";
+  if (!options.publicKey.trim()) {
+    throw new Error("TAURI_UPDATER_PUBLIC_KEY is required to verify every signed artifact");
   }
   const output = path.resolve(options.output);
   const manifest = await generateManifest(options);

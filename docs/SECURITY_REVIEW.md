@@ -42,6 +42,7 @@ node --check extensions/chromium/background.js
 node --check extensions/firefox/background.js
 node scripts/validate-updater-design.mjs
 node --test scripts/test-generate-update-manifest.mjs
+node --test scripts/test-prepare-updater-config.mjs
 ```
 
 Report unresolved security findings privately according to `SECURITY.md`; never paste real tokens or private URLs into issues or test fixtures.
