@@ -82,6 +82,8 @@ QuiverDL applies stricter platform-aware containment:
 - Conservatively reject case-folded or Unicode-normalized path collisions on every platform before
   starting any file. Do not infer destination filesystem semantics from the operating-system name;
   Linux destinations can also be case-insensitive or normalization-aware.
+- Reject the batch if any normalized file path is a strict component-prefix of another file path,
+  such as `a` and `a/b`; one destination cannot simultaneously be a file and directory.
 - When a component already exists, compare stable filesystem identity obtained from the no-follow
   handle so short-name or filesystem-specific aliases cannot make two batch paths share a target.
 - Reserve the destination, partial, state, temporary, and segment paths for the full batch. Use the
@@ -144,8 +146,9 @@ rebinding.
   numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
   all Windows-invalid characters, component/path length edges, trailing-dot/space aliases,
-  alternate data streams, Unicode/case collisions, existing short-name or filesystem aliases,
-  adversarial symlink/reparse-point swaps during creation, and destination no-replace behavior.
+  alternate data streams, Unicode/case and file/directory prefix collisions, existing short-name or
+  filesystem aliases, adversarial symlink/reparse-point swaps during creation, and destination
+  no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
   answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.

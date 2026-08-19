@@ -50,14 +50,17 @@ peers, or addresses aimed at local services.
   extensions, and normalized or case-folded collisions on every platform.
 - Bound every path component to at most 240 UTF-8 bytes and 240 UTF-16 code units, relative depth to
   32 components, and each encoded relative path to 2,048 bytes/code units before filesystem access.
+- Reject duplicate normalized paths and any file path that is a strict component-prefix of another
+  file path before allocation or reservation.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
 - Retain a trusted root directory handle and perform no-follow, handle-relative traversal and
   creation on every platform. Rechecking a path before creation is not sufficient against a local
   symlink or reparse-point swap. Compare stable identity for existing components so short-name or
   filesystem-specific aliases cannot make selected paths share a target.
-- Accumulate all file and selected-file sizes with checked arithmetic, reject totals above
-  `u64::MAX`, and preserve byte counts losslessly across backend, IPC, persistence, and UI layers.
+- Convert every file length losslessly to a non-negative `u64` before aggregation. Accumulate all
+  file and selected-file sizes with checked arithmetic, reject totals above `u64::MAX`, and preserve
+  byte counts losslessly across backend, IPC, persistence, and UI layers.
 - For a local `.torrent` file, present the full file tree and exact selected byte total before
   allocation or network discovery.
 - Magnet URIs may be parsed and displayed offline but cannot resolve metadata or enter the transfer
@@ -135,10 +138,11 @@ Before implementation begins, a proposal must:
    enforcement of the selected privacy policy.
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
    for malicious messages, duplicate/unsorted keys at every dictionary layer, per-file and aggregate
-   overflow, recovered-piece tampering, all Windows-invalid characters, component/path length edges,
-   adversarial symlink/reparse-point swaps, trailing-dot/space and alternate-data-stream aliases,
-   scheme rejection, hash failure, cancellation, private torrents, special-use addresses,
-   mixed-address DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
+   overflow, negative lengths, recovered-piece tampering, all Windows-invalid characters,
+   component/path length edges, file/directory prefix conflicts, adversarial symlink/reparse-point
+   swaps, trailing-dot/space and alternate-data-stream aliases, scheme rejection, hash failure,
+   cancellation, private torrents, special-use addresses, mixed-address DNS answers, redirect
+   changes, DNS rebinding, and resource exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 
