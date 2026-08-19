@@ -191,6 +191,8 @@ function App() {
   const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
   const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
   const stateLoaded = useRef(false);
+  const saveTimer = useRef<number | null>(null);
+  const latestSnapshot = useRef<AppSnapshot | null>(null);
   const t = (key: MessageKey) => translate(settings.language, key);
 
   useEffect(() => {
@@ -236,21 +238,30 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!stateLoaded.current) return;
-    const timeout = window.setTimeout(() => {
-      const snapshot: AppSnapshot = {
-        schemaVersion: 1,
-        settings,
-        downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
-          ...item,
-          downloadedBytes: item.downloadedBytes.toString(),
-          totalBytes: item.totalBytes?.toString() ?? null,
-        })),
-      };
-      void invoke("save_app_state", { snapshot }).catch((cause) => setError(String(cause)));
-    }, 250);
-    return () => window.clearTimeout(timeout);
+    latestSnapshot.current = {
+      schemaVersion: 1,
+      settings,
+      downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
+        ...item,
+        downloadedBytes: item.downloadedBytes.toString(),
+        totalBytes: item.totalBytes?.toString() ?? null,
+      })),
+    };
+    if (!stateLoaded.current || saveTimer.current !== null) return;
+    saveTimer.current = window.setTimeout(() => {
+      saveTimer.current = null;
+      if (latestSnapshot.current) {
+        void invoke("save_app_state", { snapshot: latestSnapshot.current }).catch((cause) => setError(String(cause)));
+      }
+    }, 500);
   }, [downloads, settings]);
+
+  useEffect(
+    () => () => {
+      if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;

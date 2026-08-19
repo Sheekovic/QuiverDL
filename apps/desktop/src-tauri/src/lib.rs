@@ -177,11 +177,11 @@ async fn start_download(
     let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
         let mut last_download_progress = Instant::now()
-            .checked_sub(Duration::from_millis(100))
+            .checked_sub(Duration::from_millis(250))
             .unwrap_or_else(Instant::now);
         while let Some(event) = progress_rx.recv().await {
             if event.status == DownloadStatus::Downloading
-                && last_download_progress.elapsed() < Duration::from_millis(100)
+                && last_download_progress.elapsed() < Duration::from_millis(250)
             {
                 continue;
             }

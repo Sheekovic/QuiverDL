@@ -47,6 +47,7 @@ button:focus-visible, input:focus-visible {
   flex-direction: column;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
+  overflow-y: auto;
 }
 .brand {
   display: flex;
