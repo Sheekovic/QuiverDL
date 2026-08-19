@@ -71,11 +71,11 @@ struct SequentialQueue {
 struct SequentialQueueState {
     next_ticket: u64,
     active_ticket: Option<u64>,
-    entries: BTreeMap<u64, bool>,
+    entries: BTreeMap<u64, Option<u64>>,
 }
 
 impl SequentialQueue {
-    fn register(&self, ready: bool) -> Result<u64, String> {
+    fn register(&self, scheduled_for_ms: Option<u64>) -> Result<u64, String> {
         let mut state = self
             .state
             .lock()
@@ -85,25 +85,10 @@ impl SequentialQueue {
             .next_ticket
             .checked_add(1)
             .ok_or_else(|| "The sequential queue has exhausted its ticket range".to_string())?;
-        state.entries.insert(ticket, ready);
+        state.entries.insert(ticket, scheduled_for_ms);
         drop(state);
         self.changed.notify_waiters();
         Ok(ticket)
-    }
-
-    fn mark_ready(&self, ticket: u64) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "The sequential queue is unavailable".to_string())?;
-        let ready = state
-            .entries
-            .get_mut(&ticket)
-            .ok_or_else(|| "This download is no longer registered".to_string())?;
-        *ready = true;
-        drop(state);
-        self.changed.notify_waiters();
-        Ok(())
     }
 
     fn remove(&self, ticket: u64) {
@@ -124,15 +109,21 @@ impl SequentialQueue {
         loop {
             let changed = self.changed.notified();
             {
+                let now = unix_time_ms()?;
                 let mut state = self
                     .state
                     .lock()
                     .map_err(|_| "The sequential queue is unavailable".to_string())?;
-                let is_next_ready = state
-                    .entries
-                    .iter()
-                    .find_map(|(candidate, ready)| ready.then_some(*candidate))
-                    == Some(ticket);
+                let is_next_ready =
+                    state
+                        .entries
+                        .iter()
+                        .find_map(|(candidate, scheduled_for_ms)| {
+                            scheduled_for_ms
+                                .is_none_or(|scheduled| scheduled <= now)
+                                .then_some(*candidate)
+                        })
+                        == Some(ticket);
                 if state.active_ticket.is_none() && is_next_ready {
                     state.active_ticket = Some(ticket);
                     return Ok(SequentialPermit {
@@ -242,8 +233,6 @@ fn register_download(
         .as_deref()
         .map(parse_queue_timestamp)
         .transpose()?;
-    let ready =
-        scheduled_for_ms.is_none_or(|scheduled| unix_time_ms().is_ok_and(|now| scheduled <= now));
     let mut transfers = registry
         .transfers
         .lock()
@@ -252,7 +241,7 @@ fn register_download(
         return Err("A download with this identifier is already registered".into());
     }
     let queue_ticket = if queue_mode == "sequential" {
-        Some(registry.sequential_queue.register(ready)?)
+        Some(registry.sequential_queue.register(scheduled_for_ms)?)
     } else {
         None
     };
@@ -480,7 +469,6 @@ async fn wait_for_queue_turn(
     let Some(queue_ticket) = queue_ticket else {
         return Ok(None);
     };
-    sequential_queue.mark_ready(queue_ticket)?;
     let permit = sequential_queue.acquire(queue_ticket, control).await?;
     control
         .checkpoint()
@@ -837,8 +825,8 @@ mod tests {
     #[tokio::test]
     async fn sequential_queue_uses_registered_ticket_order() {
         let queue = std::sync::Arc::new(SequentialQueue::default());
-        let first_ticket = queue.register(true).expect("first ticket");
-        let second_ticket = queue.register(true).expect("second ticket");
+        let first_ticket = queue.register(None).expect("first ticket");
+        let second_ticket = queue.register(None).expect("second ticket");
         let second = tokio::spawn({
             let queue = queue.clone();
             async move {
@@ -863,12 +851,33 @@ mod tests {
     #[tokio::test]
     async fn a_future_ticket_does_not_block_ready_work() {
         let queue = std::sync::Arc::new(SequentialQueue::default());
-        let _future = queue.register(false).expect("future ticket");
-        let ready = queue.register(true).expect("ready ticket");
+        let _future = queue
+            .register(Some(32_503_680_000_000))
+            .expect("future ticket");
+        let ready = queue.register(None).expect("ready ticket");
         queue
             .acquire(ready, &quiver_core::DownloadControl::new())
             .await
             .expect("ready work should acquire");
+    }
+
+    #[tokio::test]
+    async fn a_due_scheduled_ticket_blocks_newer_ready_work_before_preparation_finishes() {
+        let queue = std::sync::Arc::new(SequentialQueue::default());
+        let _older_due = queue.register(Some(0)).expect("older due ticket");
+        let newer = queue.register(None).expect("newer ready ticket");
+        let waiter = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                queue
+                    .acquire(newer, &quiver_core::DownloadControl::new())
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        waiter.abort();
+        let _ = waiter.await;
     }
 
     #[tokio::test]

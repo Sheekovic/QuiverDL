@@ -657,7 +657,10 @@ function App() {
   }
 
   async function registerDownload(item: DownloadItem, executionSettings: AppSettings) {
-    if (pendingCancellations.current.has(item.id)) return false;
+    if (pendingCancellations.current.has(item.id)) {
+      pendingCancellations.current.delete(item.id);
+      return false;
+    }
     try {
       await invoke("register_download", {
         taskId: item.id,
@@ -668,6 +671,7 @@ function App() {
       if (pendingCancellations.current.has(item.id)) {
         await invoke("discard_registered_download", { taskId: item.id });
         registeredDownloads.current.delete(item.id);
+        pendingCancellations.current.delete(item.id);
         updateDownload(item.id, { status: "cancelled", error: undefined });
         return false;
       }
@@ -675,6 +679,7 @@ function App() {
     } catch (cause) {
       registeredDownloads.current.delete(item.id);
       void invoke("discard_registered_download", { taskId: item.id });
+      pendingCancellations.current.delete(item.id);
       updateDownload(item.id, { status: "failed", error: String(cause) });
       return false;
     }
@@ -825,7 +830,6 @@ function App() {
   }
 
   function removeDownload(id: string) {
-    pendingCancellations.current.delete(id);
     setDownloads((current) => current.filter((item) => item.id !== id));
   }
 
