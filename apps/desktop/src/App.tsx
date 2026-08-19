@@ -233,7 +233,9 @@ function App() {
         .then((requests) => {
           if (active) setBrowserRequests(requests);
         })
-        .catch(() => undefined);
+        .catch((cause) => {
+          if (active) setError(`Could not read browser download requests: ${String(cause)}`);
+        });
     };
     refresh();
     const interval = window.setInterval(refresh, 3_000);
@@ -370,6 +372,32 @@ function App() {
     );
   }
 
+  async function persistSnapshotNow(snapshot: AppSnapshot) {
+    latestSnapshot.current = snapshot;
+    if (saveTimer.current !== null) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    if (saveInFlight.current) {
+      saveAgain.current = true;
+      while (saveInFlight.current) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+    }
+
+    saveInFlight.current = true;
+    try {
+      do {
+        saveAgain.current = false;
+        if (latestSnapshot.current) {
+          await invoke("save_app_state", { snapshot: latestSnapshot.current });
+        }
+      } while (saveAgain.current);
+    } finally {
+      saveInFlight.current = false;
+    }
+  }
+
   async function inspectLink(event: FormEvent) {
     event.preventDefault();
     const submittedUrl = url.trim();
@@ -430,33 +458,40 @@ function App() {
       totalBytes: null,
       recoverable: false,
     };
-    const nextDownloads = existingId
-      ? downloads.map((existing) => (existing.id === existingId ? item : existing))
-      : [item, ...downloads];
     if (browserRequestId) {
-      const snapshot: AppSnapshot = {
+      const { recoverable: _recoverable, ...storedItem } = item;
+      const currentSnapshot = latestSnapshot.current ?? {
         schemaVersion: 1,
         settings,
-        downloads: nextDownloads.map(({ recoverable: _recoverable, ...download }) => ({
+        downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
           ...download,
           downloadedBytes: download.downloadedBytes.toString(),
           totalBytes: download.totalBytes?.toString() ?? null,
         })),
       };
+      const snapshot: AppSnapshot = {
+        schemaVersion: 1,
+        settings,
+        downloads: [
+          {
+            ...storedItem,
+            downloadedBytes: storedItem.downloadedBytes.toString(),
+            totalBytes: storedItem.totalBytes?.toString() ?? null,
+          },
+          ...currentSnapshot.downloads.filter((download) => download.id !== item.id),
+        ],
+      };
       try {
-        await invoke("save_app_state", { snapshot });
-        latestSnapshot.current = snapshot;
+        await persistSnapshotNow(snapshot);
       } catch (cause) {
         setError(`Could not durably queue the browser download: ${String(cause)}`);
         return;
       }
     }
     setDownloads((current) =>
-      browserRequestId
-        ? nextDownloads
-        : existingId
-          ? current.map((existing) => (existing.id === existingId ? item : existing))
-          : [item, ...current],
+      existingId
+        ? current.map((existing) => (existing.id === existingId ? item : existing))
+        : [item, ...current.filter((existing) => existing.id !== item.id)],
     );
     setFilter("all");
 
