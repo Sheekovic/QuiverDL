@@ -117,8 +117,10 @@ bytes without promoting them.
   denied by default; metadata cannot grant access to them. Any local-network exception is an
   explicit per-torrent approval, and mixed public/private DNS answers fail closed.
 - HTTP tracker and web-seed redirects are bounded and re-enter address classification on every hop.
-  They must remain HTTPS on every hop. Resolution and the actual socket destination remain bound to
-  the approved address class so DNS rebinding cannot bypass the decision.
+  They must remain HTTPS and same-origin on every hop; cross-origin redirects fail closed so an
+  unconfirmed tracker or seed never receives the torrent identifier or request. Resolution and the
+  actual socket destination remain bound to the approved address class so DNS rebinding cannot
+  bypass the decision.
 - Incoming listeners, DHT, peer exchange, local service discovery, UPnP/NAT-PMP/PCP, UDP trackers,
   and seeding after completion are individually modeled features, not implicit defaults.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
@@ -153,8 +155,8 @@ Before implementation begins, a proposal must:
    tampering, all Windows-invalid characters, component/path length edges, file/directory prefix
    conflicts, adversarial symlink/reparse-point swaps, trailing-dot/space and
    alternate-data-stream aliases, scheme rejection, hash failure, cancellation, private torrents,
-   special-use addresses, mixed-address DNS answers, redirect changes, DNS rebinding, and resource
-   exhaustion.
+   special-use addresses, mixed-address DNS answers, downgrade/cross-origin redirects, DNS
+   rebinding, and resource exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 

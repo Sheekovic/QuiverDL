@@ -118,6 +118,9 @@ QuiverDL applies stricter platform-aware containment:
   DNS change cannot bypass the decision.
 - Every redirect remains restricted to HTTP(S), and an HTTPS-to-HTTP downgrade requires explicit
   insecure-transport confirmation before the HTTP connection is made.
+- Phase one rejects cross-origin redirects for both metadata and mirrors. A later UI may explicitly
+  confirm a new origin before connecting, but an unseen redirect target never inherits the original
+  host's approval.
 - Never copy request credentials or private headers between mirror origins. Stored proxy
   credentials remain inside the existing backend boundary and are not exposed to Metalink data.
 - Prevent mirror and metadata loops. Bound attempted mirrors and do not retry a failed mirror
@@ -154,7 +157,8 @@ rebinding.
   symlink/reparse-point swaps during creation, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
-  answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.
+  answers, DNS rebinding, cross-origin redirect rejection, unverifiable proxy resolution, and
+  failure without public-internet access.
 - The persistent schema records the confirmed metadata identity, selected paths, expected sizes and
   hashes, and per-file state atomically.
 - UI review covers keyboard access, RTL layout, adaptive themes, warnings, and complete pre-network
