@@ -236,6 +236,7 @@ async fn start_download(
 }
 
 const MAX_QUEUE_TIMESTAMP_MS: u64 = 32_503_680_000_000;
+const MAX_SCHEDULE_SLEEP: Duration = Duration::from_secs(30);
 
 pub(crate) fn parse_queue_timestamp(value: &str) -> Result<u64, String> {
     if value.is_empty() || value.len() > 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -259,6 +260,14 @@ fn unix_time_ms() -> Result<u64, String> {
         .map_err(|_| "The system clock is outside the supported range".into())
 }
 
+fn schedule_sleep_duration(scheduled_for_ms: u64, now_ms: u64) -> Option<Duration> {
+    scheduled_for_ms
+        .checked_sub(now_ms)
+        .filter(|remaining| *remaining > 0)
+        .map(Duration::from_millis)
+        .map(|remaining| remaining.min(MAX_SCHEDULE_SLEEP))
+}
+
 async fn wait_for_queue_turn(
     control: &DownloadControl,
     scheduled_for_ms: Option<u64>,
@@ -266,11 +275,14 @@ async fn wait_for_queue_turn(
     sequential_gate: Arc<Semaphore>,
 ) -> Result<Option<OwnedSemaphorePermit>, String> {
     if let Some(scheduled_for_ms) = scheduled_for_ms {
-        let now = unix_time_ms()?;
-        if scheduled_for_ms > now {
+        loop {
+            let now = unix_time_ms()?;
+            let Some(delay) = schedule_sleep_duration(scheduled_for_ms, now) else {
+                break;
+            };
             tokio::select! {
                 _ = control.cancelled() => return Err("download was cancelled".into()),
-                () = tokio::time::sleep(Duration::from_millis(scheduled_for_ms - now)) => {}
+                () = tokio::time::sleep(delay) => {}
             }
         }
     }
@@ -585,8 +597,8 @@ mod tests {
 
     use super::{
         AppSettings, DownloadProgress, TransferRegistry, parse_queue_timestamp,
-        prepare_destination, proxy_policy, sanitize_filename, validate_destination,
-        validate_task_id, wait_for_queue_turn,
+        prepare_destination, proxy_policy, sanitize_filename, schedule_sleep_duration,
+        validate_destination, validate_task_id, wait_for_queue_turn,
     };
 
     #[test]
@@ -605,6 +617,20 @@ mod tests {
         assert!(parse_queue_timestamp("").is_err());
         assert!(parse_queue_timestamp("1770.5").is_err());
         assert!(parse_queue_timestamp("32503680000001").is_err());
+    }
+
+    #[test]
+    fn schedule_waits_recheck_long_wall_clock_deadlines() {
+        assert_eq!(
+            schedule_sleep_duration(1_000_000, 1),
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(
+            schedule_sleep_duration(1_001, 1_000),
+            Some(std::time::Duration::from_millis(1))
+        );
+        assert_eq!(schedule_sleep_duration(1_000, 1_000), None);
+        assert_eq!(schedule_sleep_duration(999, 1_000), None);
     }
 
     #[tokio::test]
