@@ -91,6 +91,17 @@ jobs:
       - name: Test Windows native host installer
         shell: powershell
         run: .\extensions\native-host\test-install-windows.ps1
+      - name: Validate Microsoft Store config script syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path .\scripts\prepare-microsoft-store-config.ps1),
+            [ref] $tokens,
+            [ref] $errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:

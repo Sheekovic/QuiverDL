@@ -33,20 +33,24 @@ requests.
 
 Tauri currently submits a linked offline EXE/MSI installer rather than generating an MSIX. The
 overlay `apps/desktop/src-tauri/tauri.microsoftstore.conf.json` selects the required offline WebView2
-installer and a publisher name distinct from the product name. Build on Windows after importing the
-owner's Authenticode certificate:
+installer and a publisher name distinct from the product name. After importing the owner's
+Authenticode certificate, generate the ignored combined Store/signing overlay and build on Windows:
 
 ```powershell
 npm ci --prefix apps/desktop
+$thumbprint = 'REPLACE_WITH_THE_40_HEX_CERTIFICATE_THUMBPRINT'
+.\scripts\prepare-microsoft-store-config.ps1 -CertificateThumbprint $thumbprint
 npm run tauri --prefix apps/desktop -- build --no-bundle
-npm run tauri --prefix apps/desktop -- bundle --bundles nsis,msi --config src-tauri/tauri.microsoftstore.conf.json
+npm run tauri --prefix apps/desktop -- bundle --bundles nsis,msi --config src-tauri/tauri.microsoftstore.release.conf.json
 ```
 
-Verify the signatures with `signtool verify /pa`, test offline install/update/uninstall on a clean
-Windows 11 VM, run the Windows App Certification Kit, upload the immutable installer to stable HTTPS
-hosting, and link that exact URL in Partner Center. MSI/EXE Store submissions are not re-signed by
-Microsoft, so publication remains blocked until the repository owner supplies a trusted signing
-certificate.
+The preparation script validates the certificate's private key, code-signing usage, and expiry, then
+injects its thumbprint, SHA-256 digest, and timestamp service without modifying the tracked overlay.
+Verify every generated executable and MSI with `signtool verify /pa`, test offline
+install/update/uninstall on a clean Windows 11 VM, run the Windows App Certification Kit, upload the
+immutable installer to stable HTTPS hosting, and link that exact URL in Partner Center. MSI/EXE
+Store submissions are not re-signed by Microsoft, so publication remains blocked until the
+repository owner supplies a trusted signing certificate.
 
 ## Snap Store
 
