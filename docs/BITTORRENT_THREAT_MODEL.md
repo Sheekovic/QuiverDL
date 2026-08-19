@@ -126,8 +126,10 @@ bytes without promoting them.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
   rate, download rate, and share duration are bounded globally and per torrent.
 - Tracker URLs and magnets may contain private passkeys. Redact both from errors and logs, never
-  include them in public diagnostics, and do not persist an offline-inspected magnet. Store tracker
-  URLs only in protected local state.
+  include them in public diagnostics, and do not persist an offline-inspected magnet. The
+  confirmation UI displays only a sanitized tracker identity (scheme and host, plus a non-default
+  port); it strips userinfo, path, query, and fragment so passkeys cannot appear on screen or in
+  screenshots. Store full tracker URLs only in protected local state.
 - Private torrents must follow [BEP 27](https://www.bittorrent.org/beps/bep_0027.html): contact only
   the private tracker and peers it returns, with DHT, peer exchange, and local discovery disabled.
 - Pause and quit semantics must say whether announcing, uploading, and listeners stop. **Stopped**

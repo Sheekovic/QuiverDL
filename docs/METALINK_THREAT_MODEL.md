@@ -100,8 +100,9 @@ QuiverDL applies stricter platform-aware containment:
   apply the same DNS-binding rules as mirror requests, and require separate approval before a public
   metadata URL can enter a local or special-use address class.
 - The confirmation screen lists all destination-relative paths, total bytes, mirror hosts, and
-  whether publisher authenticity is unverified. Confirmation precedes inspection or download
-  requests to listed mirrors.
+  whether publisher authenticity is unverified. Parsing and rendering this preview are strictly
+  offline: do not resolve, classify, probe, inspect, or otherwise contact a listed mirror until the
+  user confirms. Confirmation precedes every DNS lookup and every request to listed mirrors.
 - Only HTTP and HTTPS mirrors are eligible. HTTPS is preferred; use of an HTTP mirror requires the
   same explicit insecure-transport warning used for a direct HTTP download.
 - Apply the existing retry, per-host connection, global connection, proxy, speed, cancellation, and
