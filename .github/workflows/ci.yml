@@ -69,6 +69,7 @@ jobs:
           node -e "for (const file of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(file, 'utf8'))" ../../extensions/chromium/manifest.json ../../extensions/firefox/manifest.json ../../extensions/native-host/chromium-host.json ../../extensions/native-host/firefox-host.json
           sh -n ../../extensions/native-host/install-linux.sh
           sh -n ../../extensions/native-host/install-macos.sh
+          ../../extensions/native-host/test-installers.sh
 
   desktop-check:
     name: Desktop Rust check

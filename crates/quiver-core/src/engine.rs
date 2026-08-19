@@ -203,6 +203,9 @@ impl DownloadEngine {
             && previous
                 .as_ref()
                 .is_some_and(|state| state.segment_ranges == segment_ranges);
+        if !can_resume_segments {
+            remove_segment_files(&partial_path).await?;
+        }
         let partial_state = PartialState {
             url: request.url.to_string(),
             total_bytes: probe.total_bytes,

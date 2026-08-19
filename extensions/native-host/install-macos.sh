@@ -21,23 +21,47 @@ if [ "${#extension_id}" -ne 32 ]; then
   exit 2
 fi
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-escaped_host=$(printf '%s' "$host_path" | sed 's/[&|\\]/\\&/g')
+if printf '%s' "$host_path" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+  echo "host path cannot contain control characters" >&2
+  exit 2
+fi
+json_host=$(printf '%s' "$host_path" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
 chrome_dir="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 chrome_testing_dir="$HOME/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts"
 chromium_dir="$HOME/Library/Application Support/Chromium/NativeMessagingHosts"
 firefox_dir="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
 mkdir -p "$chrome_dir" "$chrome_testing_dir" "$chromium_dir" "$firefox_dir"
 
-chromium_manifest=$(sed \
-  -e "s|REPLACE_WITH_ABSOLUTE_NATIVE_HOST_PATH|$escaped_host|" \
-  -e "s|REPLACE_WITH_EXTENSION_ID|$extension_id|" \
-  "$script_dir/chromium-host.json")
-printf '%s\n' "$chromium_manifest" > "$chrome_dir/app.quiverdl.native.json"
-printf '%s\n' "$chromium_manifest" > "$chrome_testing_dir/app.quiverdl.native.json"
-printf '%s\n' "$chromium_manifest" > "$chromium_dir/app.quiverdl.native.json"
-sed "s|REPLACE_WITH_ABSOLUTE_NATIVE_HOST_PATH|$escaped_host|" \
-  "$script_dir/firefox-host.json" > "$firefox_dir/app.quiverdl.native.json"
+write_chromium_manifest() {
+  target=$1
+  {
+    printf '%s\n' '{'
+    printf '%s\n' '  "name": "app.quiverdl.native",'
+    printf '%s\n' '  "description": "QuiverDL authenticated native messaging bridge",'
+    printf '  "path": "%s",\n' "$json_host"
+    printf '%s\n' '  "type": "stdio",'
+    printf '  "allowed_origins": ["chrome-extension://%s/"]\n' "$extension_id"
+    printf '%s\n' '}'
+  } > "$target"
+}
+
+write_firefox_manifest() {
+  target=$1
+  {
+    printf '%s\n' '{'
+    printf '%s\n' '  "name": "app.quiverdl.native",'
+    printf '%s\n' '  "description": "QuiverDL authenticated native messaging bridge",'
+    printf '  "path": "%s",\n' "$json_host"
+    printf '%s\n' '  "type": "stdio",'
+    printf '%s\n' '  "allowed_extensions": ["quiverdl@quiverdl.app"]'
+    printf '%s\n' '}'
+  } > "$target"
+}
+
+write_chromium_manifest "$chrome_dir/app.quiverdl.native.json"
+write_chromium_manifest "$chrome_testing_dir/app.quiverdl.native.json"
+write_chromium_manifest "$chromium_dir/app.quiverdl.native.json"
+write_firefox_manifest "$firefox_dir/app.quiverdl.native.json"
 chmod 600 \
   "$chrome_dir/app.quiverdl.native.json" \
   "$chrome_testing_dir/app.quiverdl.native.json" \
