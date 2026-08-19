@@ -10,10 +10,10 @@ use std::{
 use futures_util::{StreamExt, future::try_join_all};
 use percent_encoding::percent_decode_str;
 use reqwest::{
-    Client, StatusCode,
+    Client, Response, StatusCode,
     header::{
         ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE,
-        LAST_MODIFIED, RANGE,
+        LAST_MODIFIED, LOCATION, RANGE,
     },
 };
 use sha2::{Digest, Sha256};
@@ -31,6 +31,7 @@ use crate::{
 
 const USER_AGENT: &str = concat!("QuiverDL/", env!("CARGO_PKG_VERSION"));
 const MAX_SEGMENTS: usize = 16;
+const MAX_REDIRECTS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeResult {
@@ -62,7 +63,7 @@ impl DownloadEngine {
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(24 * 60 * 60))
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()?;
         Ok(Self {
             client,
@@ -84,45 +85,64 @@ impl DownloadEngine {
     }
 
     pub async fn probe(&self, url: &Url) -> Result<ProbeResult> {
+        let mut current = url.clone();
+        for redirects in 0..=MAX_REDIRECTS {
+            let response = self.send_probe(&current).await?;
+            if let Some(next) = redirect_target(&response)? {
+                if redirects == MAX_REDIRECTS {
+                    return Err(Error::InvalidResponse(format!(
+                        "probe exceeded {MAX_REDIRECTS} redirects"
+                    )));
+                }
+                current = next;
+                continue;
+            }
+            return probe_result(response);
+        }
+        unreachable!("the redirect loop always returns or continues")
+    }
+
+    async fn probe_for_download(
+        &self,
+        url: &Url,
+        max_connections_per_host: u8,
+        control: &DownloadControl,
+    ) -> Result<ProbeResult> {
+        let mut current = url.clone();
+        for redirects in 0..=MAX_REDIRECTS {
+            let permit = tokio::select! {
+                _ = control.cancelled() => return Err(Error::Cancelled),
+                permit = self.host_policy.acquire(&current, max_connections_per_host) => permit,
+            };
+            let response = tokio::select! {
+                _ = control.cancelled() => return Err(Error::Cancelled),
+                response = self.send_probe(&current) => response?,
+            };
+            let next = redirect_target(&response)?;
+            if let Some(next) = next {
+                drop(response);
+                drop(permit);
+                if redirects == MAX_REDIRECTS {
+                    return Err(Error::InvalidResponse(format!(
+                        "probe exceeded {MAX_REDIRECTS} redirects"
+                    )));
+                }
+                current = next;
+                continue;
+            }
+            return probe_result(response);
+        }
+        unreachable!("the redirect loop always returns or continues")
+    }
+
+    async fn send_probe(&self, url: &Url) -> Result<Response> {
         validate_url(url)?;
-        let response = self
+        Ok(self
             .client
             .get(url.clone())
             .header(RANGE, "bytes=0-0")
             .send()
-            .await?;
-
-        if !response.status().is_success() {
-            return Err(status_error("probe", response.status()));
-        }
-
-        let supports_ranges = response.status() == StatusCode::PARTIAL_CONTENT
-            || response
-                .headers()
-                .get(ACCEPT_RANGES)
-                .and_then(|value| value.to_str().ok())
-                .is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
-        let total_bytes = if response.status() == StatusCode::PARTIAL_CONTENT {
-            response
-                .headers()
-                .get(CONTENT_RANGE)
-                .and_then(|value| value.to_str().ok())
-                .and_then(parse_content_range_total)
-        } else {
-            header_u64(response.headers().get(CONTENT_LENGTH))
-        };
-
-        Ok(ProbeResult {
-            effective_url: response.url().clone(),
-            total_bytes,
-            supports_ranges,
-            etag: header_string(response.headers().get(ETAG)),
-            last_modified: header_string(response.headers().get(LAST_MODIFIED)),
-            suggested_filename: suggested_filename(
-                response.headers().get(CONTENT_DISPOSITION),
-                response.url(),
-            ),
-        })
+            .await?)
     }
 
     pub async fn download(
@@ -167,18 +187,14 @@ impl DownloadEngine {
         emit(&progress, &request, DownloadStatus::Probing, 0, None).await;
 
         let transfer_policy = request.transfer_policy.normalized();
-        let probe_permit = tokio::select! {
-            _ = control.cancelled() => return Err(Error::Cancelled),
-            permit = self.host_policy.acquire(
-                &request.url,
-                transfer_policy.max_connections_per_host,
-            ) => permit,
-        };
         let probe = tokio::select! {
             _ = control.cancelled() => return Err(Error::Cancelled),
-            probe = self.probe(&request.url) => probe?,
+            probe = self.probe_for_download(
+                &request.url,
+                transfer_policy.max_connections_per_host,
+                &control,
+            ) => probe?,
         };
-        drop(probe_permit);
         let partial_path = sibling_with_suffix(&request.destination, ".quiver-part");
         let state_path = sibling_with_suffix(&request.destination, ".quiver.json");
         let previous = state::load(&state_path).await?;
@@ -497,6 +513,57 @@ impl DownloadEngine {
 
         transfer_result.map(|downloaded| (downloaded, resumed))
     }
+}
+
+fn redirect_target(response: &Response) -> Result<Option<Url>> {
+    if !response.status().is_redirection() {
+        return Ok(None);
+    }
+    let location = response
+        .headers()
+        .get(LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| Error::InvalidResponse("probe redirect has no valid Location".into()))?;
+    let target = response
+        .url()
+        .join(location)
+        .map_err(|error| Error::InvalidResponse(format!("invalid probe redirect: {error}")))?;
+    validate_url(&target)?;
+    Ok(Some(target))
+}
+
+fn probe_result(response: Response) -> Result<ProbeResult> {
+    if !response.status().is_success() {
+        return Err(status_error("probe", response.status()));
+    }
+
+    let supports_ranges = response.status() == StatusCode::PARTIAL_CONTENT
+        || response
+            .headers()
+            .get(ACCEPT_RANGES)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
+    let total_bytes = if response.status() == StatusCode::PARTIAL_CONTENT {
+        response
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_content_range_total)
+    } else {
+        header_u64(response.headers().get(CONTENT_LENGTH))
+    };
+
+    Ok(ProbeResult {
+        effective_url: response.url().clone(),
+        total_bytes,
+        supports_ranges,
+        etag: header_string(response.headers().get(ETAG)),
+        last_modified: header_string(response.headers().get(LAST_MODIFIED)),
+        suggested_filename: suggested_filename(
+            response.headers().get(CONTENT_DISPOSITION),
+            response.url(),
+        ),
+    })
 }
 
 impl Default for DownloadEngine {

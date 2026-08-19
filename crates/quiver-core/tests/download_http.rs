@@ -114,6 +114,49 @@ async fn applies_the_per_host_cap_before_probe_connections_open() {
 }
 
 #[tokio::test]
+async fn applies_the_per_host_cap_to_redirected_probe_origins() {
+    let target_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("target fixture should bind");
+    let target_address = target_listener.local_addr().expect("target address");
+    let target_url =
+        Url::parse(&format!("http://{target_address}/capped.bin")).expect("target fixture URL");
+    let (first_url, first_redirect) = redirect_fixture_server(target_url.clone()).await;
+    let (second_url, second_redirect) = redirect_fixture_server(target_url).await;
+    let target = tokio::spawn(probe_cap_target_server(target_listener));
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let engine = DownloadEngine::new().expect("engine should initialize");
+    let policy = TransferPolicy {
+        max_segments: 1,
+        max_connections_per_host: 1,
+        min_segment_bytes: 1024 * 1024,
+        per_download_speed_limit_bps: None,
+    };
+    let mut first = DownloadRequest::new(first_url, directory.path().join("first-redirect.bin"));
+    first.transfer_policy = policy;
+    let mut second = DownloadRequest::new(second_url, directory.path().join("second-redirect.bin"));
+    second.transfer_policy = policy;
+    let (first_progress, first_receiver) = mpsc::channel::<ProgressEvent>(16);
+    let (second_progress, second_receiver) = mpsc::channel::<ProgressEvent>(16);
+    drop((first_receiver, second_receiver));
+    let first_engine = engine.clone();
+
+    let (first_result, second_result, first_redirect_result, second_redirect_result, target_result) = tokio::join!(
+        first_engine.download(first, DownloadControl::new(), first_progress),
+        engine.download(second, DownloadControl::new(), second_progress),
+        first_redirect,
+        second_redirect,
+        target,
+    );
+
+    first_result.expect("first redirected download should succeed");
+    second_result.expect("second redirected download should succeed");
+    first_redirect_result.expect("first redirect fixture should finish");
+    second_redirect_result.expect("second redirect fixture should finish");
+    target_result.expect("redirect target fixture should finish");
+}
+
+#[tokio::test]
 async fn invalidates_completed_segments_after_checksum_mismatch() {
     let (url, server, _fixture) = segmented_fixture_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -547,6 +590,68 @@ async fn probe_cap_fixture_server() -> (Url, tokio::task::JoinHandle<()>) {
         Url::parse(&format!("http://{address}/capped.bin")).expect("fixture URL"),
         task,
     )
+}
+
+async fn redirect_fixture_server(target: Url) -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("redirect fixture should bind");
+    let address = listener.local_addr().expect("redirect address");
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("probe should arrive");
+        let mut request = vec![0_u8; 4096];
+        let _count = socket
+            .read(&mut request)
+            .await
+            .expect("redirect probe should read");
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("redirect response should write");
+        socket.shutdown().await.expect("socket should close");
+    });
+    (
+        Url::parse(&format!("http://{address}/redirect.bin")).expect("redirect fixture URL"),
+        task,
+    )
+}
+
+async fn probe_cap_target_server(listener: TcpListener) {
+    let (mut first_socket, _) = listener
+        .accept()
+        .await
+        .expect("first target probe should arrive");
+    let mut request = vec![0_u8; 4096];
+    let count = first_socket
+        .read(&mut request)
+        .await
+        .expect("first target probe should read");
+    let first_request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+    assert!(first_request.contains("range: bytes=0-0"));
+    assert!(
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "a second connection opened while the redirected probe held the target-origin permit"
+    );
+    write_fixture_response(&mut first_socket, &first_request).await;
+
+    for _ in 0..3 {
+        let (mut socket, _) = listener
+            .accept()
+            .await
+            .expect("target request should arrive");
+        let mut request = vec![0_u8; 4096];
+        let count = socket
+            .read(&mut request)
+            .await
+            .expect("target request should read");
+        let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+        write_fixture_response(&mut socket, &request).await;
+    }
 }
 
 async fn write_fixture_response(socket: &mut tokio::net::TcpStream, request: &str) {

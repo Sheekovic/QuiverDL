@@ -84,16 +84,19 @@ impl BandwidthLimiter {
                     .schedule
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                let start = schedule.next_available.max(now);
-                let seconds = bytes as f64 / bytes_per_second as f64;
-                schedule.next_available = start + Duration::from_secs_f64(seconds);
-                start
+                if schedule.next_available <= now {
+                    let seconds = bytes as f64 / bytes_per_second as f64;
+                    schedule.next_available = now + Duration::from_secs_f64(seconds);
+                    None
+                } else {
+                    Some(schedule.next_available)
+                }
             };
-            if start <= now {
+            let Some(start) = start else {
                 return;
-            }
+            };
             tokio::select! {
-                () = tokio::time::sleep_until(start) => return,
+                () = tokio::time::sleep_until(start) => {},
                 () = &mut changed => {}
             }
         }
@@ -122,5 +125,23 @@ mod tests {
             .await
             .expect("disabled limiter should wake")
             .expect("waiter should join");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_waiter_does_not_reserve_future_capacity() {
+        let limiter = BandwidthLimiter::new(100).expect("positive limit");
+        limiter.wait(1).await;
+        let abandoned = tokio::spawn({
+            let limiter = limiter.clone();
+            async move { limiter.wait(100).await }
+        });
+        tokio::task::yield_now().await;
+        abandoned.abort();
+        abandoned.await.expect_err("waiter should be cancelled");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        timeout(Duration::from_millis(100), limiter.wait(1))
+            .await
+            .expect("a cancelled waiter must not leave its one-second reservation behind");
     }
 }
