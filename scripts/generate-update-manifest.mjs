@@ -16,6 +16,19 @@ function parseVersion(version) {
   if (!match) {
     throw new Error(`Invalid release SemVer: ${version}`);
   }
+  if (match[4]) {
+    const identifiers = match[4].split(".");
+    if (
+      identifiers.some(
+        (identifier) =>
+          !identifier ||
+          !/^[0-9A-Za-z-]+$/.test(identifier) ||
+          (/^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0")),
+      )
+    ) {
+      throw new Error(`Invalid release SemVer prerelease identifiers: ${version}`);
+    }
+  }
   return version;
 }
 
@@ -75,9 +88,21 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   if (keys.join("\n") !== SUPPORTED_PLATFORMS.join("\n")) {
     throw new Error(`Artifacts must include exactly: ${SUPPORTED_PLATFORMS.join(", ")}`);
   }
+  const pathKeys = keys.map((platform) => {
+    const resolved = path.resolve(artifacts[platform]);
+    return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
+  });
+  if (new Set(pathKeys).size !== pathKeys.length) {
+    throw new Error("Each platform must use a distinct updater artifact path");
+  }
   const platforms = {};
+  const urls = new Set();
   for (const platform of SUPPORTED_PLATFORMS) {
     platforms[platform] = await platformEntry(platform, artifacts[platform], canonicalBaseUrl);
+    if (urls.has(platforms[platform].url)) {
+      throw new Error("Each platform must produce a distinct updater artifact URL");
+    }
+    urls.add(platforms[platform].url);
   }
   return {
     version,

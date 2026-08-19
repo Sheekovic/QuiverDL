@@ -88,7 +88,14 @@ Generate the updater key offline with `tauri signer generate`, store the encrypt
 protected GitHub environment, and keep a separately tested offline backup. Never put it in a pull
 request, artifact, log, `.env`, or issue. Losing the key prevents updates to installed clients.
 
-Rotation is a two-release operation: a release signed by the old key embeds the new public key, then
-only a later release begins signing with the new private key. If the old private key is compromised,
-disable the update endpoint and direct users to a freshly OS-signed installer; do not silently trust a
-new updater key delivered by the compromised channel.
+Rotation is not transparently safe with Tauri's single embedded updater key. First publish a bridge
+release signed by the old key that embeds the new public key, keep its OS-signed installers and
+checksums immutable, and wait through a documented adoption window before switching `latest.json`
+to new-key signatures. Clients that miss the bridge cannot authenticate a new-key release; they must
+install that retained bridge or a later OS-signed package manually from the repository's verified
+release page. Never claim that a one-release rotation reaches offline clients. A future seamless
+rotation requires a reviewed multi-key verifier or a version-aware endpoint that permanently serves
+an old-key-signed bridge to old clients.
+
+If the old private key is compromised, disable the update endpoint and direct users to a freshly
+OS-signed installer; do not silently trust a new updater key delivered by the compromised channel.

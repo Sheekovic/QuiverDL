@@ -61,3 +61,22 @@ test("rejects insecure origins and incomplete platform sets", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("rejects invalid prereleases and duplicate platform artifacts", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const artifacts = await fixture(directory);
+    const baseUrl = "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3";
+    await assert.rejects(
+      generateManifest({ version: "1.2.3-01", baseUrl, artifacts }),
+      /prerelease identifiers/,
+    );
+    artifacts["linux-x86_64"] = artifacts["windows-x86_64"];
+    await assert.rejects(
+      generateManifest({ version: "1.2.3", baseUrl, artifacts }),
+      /distinct updater artifact path/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
