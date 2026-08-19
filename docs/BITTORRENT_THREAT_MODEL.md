@@ -46,6 +46,11 @@ peers, or addresses aimed at local services.
   case-folded collisions.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
+- Retain a trusted root directory handle and perform no-follow, handle-relative traversal and
+  creation on every platform. Rechecking a path before creation is not sufficient against a local
+  symlink or reparse-point swap.
+- Accumulate all file and selected-file sizes with checked arithmetic, reject totals above
+  `u64::MAX`, and preserve byte counts losslessly across backend, IPC, persistence, and UI layers.
 - For a local `.torrent` file, present the full file tree and exact selected byte total before
   allocation or network discovery.
 - Magnet URIs may be parsed and displayed offline but cannot resolve metadata or enter the transfer
@@ -69,6 +74,11 @@ upload or final assembly. Failed piece bytes are discarded, peers repeatedly sup
 bounded and evicted, and completed files still use no-replace promotion. If a trusted independent
 whole-file SHA-256 is available, QuiverDL also verifies it before completion. The UI must
 distinguish **piece-verified** from **publisher-authenticated**.
+
+Persisted verification flags are hints, not trust. After restart or crash recovery, hash every
+piece's current bytes against the v2 Merkle data before restoring verified status or allowing those
+bytes to be uploaded or assembled. Mark missing pieces incomplete and discard inconsistent state or
+bytes without promoting them.
 
 ## Network, privacy, and consent requirements
 
@@ -107,12 +117,14 @@ Before implementation begins, a proposal must:
    interface with cancellation and bounded event delivery. Process isolation is preferred if the
    selected library cannot enforce the required limits itself.
 3. Define a versioned persistence format that never confuses torrent pieces with HTTP recovery
-   sidecars and can recover safely after crashes.
+   sidecars, rehashes recovered piece bytes before trusting them, and can recover safely after
+   crashes.
 4. Specify transport-by-transport proxy behavior. Any enabled transport that bypasses the chosen
    route must be disabled or startup fails closed; user consent does not turn a routing bypass into
    enforcement of the selected privacy policy.
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
-   for malicious messages, hash failure, cancellation, private torrents, special-use addresses,
+   for malicious messages, per-file and aggregate overflow, recovered-piece tampering, adversarial
+   symlink/reparse-point swaps, hash failure, cancellation, private torrents, special-use addresses,
    mixed-address DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.

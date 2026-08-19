@@ -71,8 +71,10 @@ QuiverDL applies stricter platform-aware containment:
 - Treat every name component as untrusted. Reject empty components, `.`, `..`, absolute paths,
   drive or UNC prefixes, NUL/control characters, alternate separators, and Windows reserved names.
 - Join only sanitized relative components beneath a destination root chosen after preview.
-- Canonicalize the existing root, reject symlink traversal, and verify containment again before
-  every create and final promotion.
+- Open and retain the canonical destination-root handle, then traverse and create every component
+  relative to trusted directory handles with no-follow/reparse-point rejection. A pre-create path
+  check is not sufficient because another process can replace a directory with a symlink between
+  validation and creation. Use an equivalent atomic handle-relative mechanism on every platform.
 - Conservatively reject case-folded or Unicode-normalized path collisions on every platform before
   starting any file. Do not infer destination filesystem semantics from the operating-system name;
   Linux destinations can also be case-insensitive or normalization-aware.
@@ -133,7 +135,8 @@ rebinding.
 - Bounded parser tests cover malformed XML, entity expansion attempts, per-file and aggregate
   numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
-  Unicode/case collisions, symlink races, and destination no-replace behavior.
+  Unicode/case collisions, adversarial symlink/reparse-point swaps during creation, and destination
+  no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
   answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.
