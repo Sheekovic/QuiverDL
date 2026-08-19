@@ -19,9 +19,10 @@ the restored queue setting.
 ## Restart and controls
 
 Queued and scheduled entries remain pending across a normal quit or an interrupted shutdown. On
-the next launch, the desktop validates the saved queue, restores pending entries in enqueue order,
-and resubmits them to the Rust coordinator. A scheduled time that passed while QuiverDL was closed
-becomes due immediately.
+the next launch, the desktop validates the saved queue, restores due entries in enqueue order, and
+admits each one before submitting the next so asynchronous path preparation cannot reorder FIFO
+work. Future entries are ordered by scheduled time and then enqueue time. A scheduled time that
+passed while QuiverDL was closed becomes due immediately.
 
 Queued and scheduled entries can be cancelled before any request is sent. Destination and recovery
 sidecar paths are reserved while an entry waits, preventing two active queue items from writing the

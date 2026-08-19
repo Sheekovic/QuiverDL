@@ -219,7 +219,15 @@ function queueStatus(item: Pick<DownloadItem, "scheduledForMs">, settings: AppSe
   return settings.queueMode === "sequential" ? "queued" as const : "starting" as const;
 }
 
-function compareQueueOrder(left: DownloadItem, right: DownloadItem) {
+function compareQueueOrder(left: DownloadItem, right: DownloadItem, nowMs: bigint) {
+  const leftDue = left.scheduledForMs === null || BigInt(left.scheduledForMs) <= nowMs
+    ? 0n
+    : BigInt(left.scheduledForMs);
+  const rightDue = right.scheduledForMs === null || BigInt(right.scheduledForMs) <= nowMs
+    ? 0n
+    : BigInt(right.scheduledForMs);
+  if (leftDue < rightDue) return -1;
+  if (leftDue > rightDue) return 1;
   const leftTime = BigInt(left.queuedAtMs);
   const rightTime = BigInt(right.queuedAtMs);
   if (leftTime < rightTime) return -1;
@@ -272,14 +280,15 @@ function App() {
         setSettings(snapshot.settings);
         setProxyDraft(proxyDraftFromSettings(snapshot.settings));
         const restored = snapshot.downloads.map((item) => ({
-            ...item,
-            downloadedBytes: BigInt(item.downloadedBytes),
-            totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
-            recoverable: item.status === "paused",
-          }));
+          ...item,
+          downloadedBytes: BigInt(item.downloadedBytes),
+          totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
+          recoverable: item.status === "paused",
+        }));
+        const recoveryNowMs = BigInt(Date.now());
         recoveryQueue.current = restored
           .filter((item) => item.status === "queued" || item.status === "scheduled")
-          .sort(compareQueueOrder);
+          .sort((left, right) => compareQueueOrder(left, right, recoveryNowMs));
         setDownloads(restored);
         stateLoaded.current = true;
         setStateReady(true);
@@ -298,9 +307,15 @@ function App() {
     if (!stateReady || recoveryQueue.current.length === 0) return;
     const pending = recoveryQueue.current;
     recoveryQueue.current = [];
-    for (const item of pending) {
-      void executeDownload(item, settings);
+    if (settings.queueMode === "parallel") {
+      for (const item of pending) void executeDownload(item, settings);
+      return;
     }
+    void (async () => {
+      for (const item of pending) {
+        await executeDownload(item, settings);
+      }
+    })();
   }, [stateReady]);
 
   useEffect(() => {
@@ -645,8 +660,14 @@ function App() {
       recoverable: false,
     });
 
+    let releaseAdmission: () => void = () => undefined;
+    const admitted = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+
     const onEvent = new Channel<DownloadProgress>();
     onEvent.onmessage = (message) => {
+      releaseAdmission();
       updateDownload(id, (current) => ({
         status:
           current.status === "paused" ||
@@ -659,36 +680,41 @@ function App() {
       }));
     };
 
-    try {
-      const summary = await invoke<DownloadSummary>("start_download", {
-        taskId: id,
-        url: sourceUrl,
-        destination,
-        settings: executionSettings,
-        scheduledForMs: item.scheduledForMs,
-        onEvent,
+    void invoke<DownloadSummary>("start_download", {
+      taskId: id,
+      url: sourceUrl,
+      destination,
+      settings: executionSettings,
+      scheduledForMs: item.scheduledForMs,
+      onEvent,
+    })
+      .then((summary) => {
+        updateDownload(id, {
+          status: "completed",
+          downloadedBytes: BigInt(summary.bytesWritten),
+          totalBytes: BigInt(summary.bytesWritten),
+          sha256: summary.sha256,
+          resumed: summary.resumed,
+        });
+        if (executionSettings.notifications) {
+          void notifyCompleted(destinationName(destination));
+        }
+      })
+      .catch((cause) => {
+        const failure = String(cause);
+        updateDownload(id, (current) => {
+          const cancelled =
+            current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
+          return {
+            status: cancelled ? "cancelled" : "failed",
+            error: cancelled ? undefined : failure,
+          };
+        });
+      })
+      .finally(() => {
+        releaseAdmission();
       });
-      updateDownload(id, {
-        status: "completed",
-        downloadedBytes: BigInt(summary.bytesWritten),
-        totalBytes: BigInt(summary.bytesWritten),
-        sha256: summary.sha256,
-        resumed: summary.resumed,
-      });
-      if (executionSettings.notifications) {
-        void notifyCompleted(destinationName(destination));
-      }
-    } catch (cause) {
-      const failure = String(cause);
-      updateDownload(id, (current) => {
-        const cancelled =
-          current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
-        return {
-          status: cancelled ? "cancelled" : "failed",
-          error: cancelled ? undefined : failure,
-        };
-      });
-    }
+    await admitted;
   }
 
   function retryDownload(item: DownloadItem) {
