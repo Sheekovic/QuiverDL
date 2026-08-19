@@ -249,6 +249,8 @@ function App() {
   const [choosingDestination, setChoosingDestination] = useState(false);
   const [scheduledStart, setScheduledStart] = useState("");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
   const [reviewingBrowserRequest, setReviewingBrowserRequest] =
     useState<BrowserRequest | null>(null);
@@ -589,6 +591,7 @@ function App() {
     scheduledForMs: string | null = null,
   ) {
     await recoveryGate.current?.promise;
+    const executionSettings = latestSettings.current;
     const id = existingId ?? createTaskId();
     pendingCancellations.current.delete(id);
     if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
@@ -603,7 +606,7 @@ function App() {
       name: destinationName(destination),
       url: sourceUrl,
       destination,
-      status: queueStatus({ scheduledForMs }, settings),
+      status: queueStatus({ scheduledForMs }, executionSettings),
       downloadedBytes: 0n,
       totalBytes: null,
       recoverable: false,
@@ -625,7 +628,7 @@ function App() {
     };
     const currentSnapshot = latestSnapshot.current ?? {
       schemaVersion: 3,
-      settings,
+      settings: executionSettings,
       downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
         ...download,
         downloadedBytes: download.downloadedBytes.toString(),
@@ -634,7 +637,7 @@ function App() {
     };
     const snapshot: AppSnapshot = {
       schemaVersion: 3,
-      settings,
+      settings: executionSettings,
       downloads: currentSnapshot.downloads.some((download) => download.id === item.id)
         ? currentSnapshot.downloads.map((download) =>
             download.id === item.id ? storedStartingItem : download,
@@ -657,7 +660,7 @@ function App() {
       return;
     }
 
-    if (!(await registerDownload(item, settings))) return;
+    if (!(await registerDownload(item, executionSettings))) return;
 
     if (browserRequestId) {
       try {
@@ -671,7 +674,7 @@ function App() {
       }
     }
 
-    void executeDownload(item, settings);
+    void executeDownload(item, executionSettings);
   }
 
   async function registerDownload(item: DownloadItem, executionSettings: AppSettings) {
@@ -713,8 +716,30 @@ function App() {
       recoverable: false,
     });
 
+    let dueTimer: number | null = null;
+    const clearDueTimer = () => {
+      if (dueTimer !== null) {
+        window.clearTimeout(dueTimer);
+        dueTimer = null;
+      }
+    };
+    if (executionSettings.queueMode === "sequential" && item.scheduledForMs !== null) {
+      const refreshDueStatus = () => {
+        const remainingMs = Number(item.scheduledForMs) - Date.now();
+        if (remainingMs <= 0) {
+          updateDownload(id, (current) =>
+            current.status === "scheduled" ? { status: "queued" } : {},
+          );
+          return;
+        }
+        dueTimer = window.setTimeout(refreshDueStatus, Math.min(remainingMs, 30_000));
+      };
+      refreshDueStatus();
+    }
+
     const onEvent = new Channel<DownloadProgress>();
     onEvent.onmessage = (message) => {
+      clearDueTimer();
       updateDownload(id, (current) => ({
         status:
           current.status === "paused" ||
@@ -757,6 +782,7 @@ function App() {
         };
       });
     } finally {
+      clearDueTimer();
       registeredDownloads.current.delete(id);
       void invoke("discard_registered_download", { taskId: id });
     }

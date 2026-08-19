@@ -80,8 +80,13 @@ impl SequentialQueue {
             .state
             .lock()
             .map_err(|_| "The sequential queue is unavailable".to_string())?;
-        if state.entries.insert(ticket, scheduled_for_ms).is_some() {
-            return Err("A download with this queue sequence is already registered".into());
+        match state.entries.entry(ticket) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(scheduled_for_ms);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err("A download with this queue sequence is already registered".into());
+            }
         }
         drop(state);
         self.changed.notify_waiters();
@@ -850,6 +855,15 @@ mod tests {
         assert_eq!(parse_queue_sequence("18446744073709551615"), Ok(u64::MAX));
         assert!(parse_queue_sequence("18446744073709551616").is_err());
         assert!(parse_queue_sequence("1.5").is_err());
+    }
+
+    #[test]
+    fn duplicate_queue_sequence_does_not_replace_the_original_deadline() {
+        let queue = SequentialQueue::default();
+        queue.register(7, None).expect("original ticket");
+        assert!(queue.register(7, Some(32_503_680_000_000)).is_err());
+        let state = queue.state.lock().expect("queue state");
+        assert_eq!(state.entries.get(&7), Some(&None));
     }
 
     #[test]
