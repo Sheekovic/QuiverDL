@@ -1,6 +1,6 @@
 # Release process
 
-QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. The workflow uses locked Cargo and npm dependency graphs, builds on each target operating system, creates Windows NSIS/MSI installers plus a portable archive, Linux DEB/RPM/AppImage packages, macOS app/DMG bundles for Intel and Apple Silicon, and native-host archives with SHA-256 checksum files. Releases begin as drafts so a maintainer can inspect every asset before publishing.
+QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. The workflow uses locked Cargo and npm dependency graphs, builds on each target operating system, creates Windows NSIS/MSI installers plus a portable archive, Linux DEB/RPM/AppImage packages, macOS app/DMG bundles for Intel and Apple Silicon, and native-host archives with portable SHA-256 checksum files. Standalone macOS host archives are submitted to Apple notarization after the host is signed. Releases begin as drafts so a maintainer can inspect every asset before publishing.
 
 ## One-time repository setup
 

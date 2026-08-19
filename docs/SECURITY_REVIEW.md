@@ -11,6 +11,7 @@ Review this checklist for changes touching transfers, paths, persistence, browse
 - Persistent JSON is size/shape/range validated and atomically replaced.
 - Tauri commands validate at the Rust boundary and capabilities remain least privilege.
 - Native messages are framed, size-limited, versioned, authenticated, and never persist the token in queue items.
+- Native bridge directories and token files are private before any secret bytes are written.
 - Browser interception remains off by default and does not forward cookies, credentials, history, or page content.
 - New dependencies are justified, locked, maintained, and checked for advisories and license compatibility.
 - Release artifacts are produced only by the protected tag workflow, signed where required, checksummed, and manually inspected before a draft is published.

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 const HOST_NAME: &str = "app.quiverdl.native";
@@ -45,6 +46,9 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+                .await
+                .map_err(|error| format!("Could not protect the bridge directory: {error}"))?;
             tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
                 .await
                 .map_err(|error| format!("Could not protect bridge settings: {error}"))?;
@@ -55,6 +59,13 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|error| format!("Could not create the bridge directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|error| format!("Could not protect the bridge directory: {error}"))?;
+    }
     let config = BridgeConfig {
         token: hex::encode(rand::random::<[u8; 32]>()),
         inbox_dir: directory.join("inbox"),
@@ -62,9 +73,33 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| format!("Could not encode bridge settings: {error}"))?;
     let temporary = directory.join("native-bridge.json.tmp");
-    tokio::fs::write(&temporary, bytes)
+    if tokio::fs::try_exists(&temporary)
+        .await
+        .map_err(|error| format!("Could not inspect temporary bridge settings: {error}"))?
+    {
+        tokio::fs::remove_file(&temporary)
+            .await
+            .map_err(|error| format!("Could not replace temporary bridge settings: {error}"))?;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let mut temporary_file = options
+        .open(&temporary)
+        .await
+        .map_err(|error| format!("Could not create protected bridge settings: {error}"))?;
+    temporary_file
+        .write_all(&bytes)
         .await
         .map_err(|error| format!("Could not write bridge settings: {error}"))?;
+    temporary_file
+        .sync_all()
+        .await
+        .map_err(|error| format!("Could not sync bridge settings: {error}"))?;
+    drop(temporary_file);
     let commit_path = path.clone();
     tokio::task::spawn_blocking(move || {
         super::persistence::atomic_replace(&temporary, &commit_path)

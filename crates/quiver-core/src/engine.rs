@@ -144,7 +144,7 @@ impl DownloadEngine {
                         .initial_delay_ms
                         .saturating_mul(1_u64 << exponent)
                         .min(policy.max_delay_ms);
-                    emit(&progress, &request, DownloadStatus::Retrying, 0, None);
+                    emit(&progress, &request, DownloadStatus::Retrying, 0, None).await;
                     tokio::select! {
                         _ = control.cancelled() => return Err(Error::Cancelled),
                         () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
@@ -164,7 +164,7 @@ impl DownloadEngine {
     ) -> Result<DownloadResult> {
         validate_url(&request.url)?;
         ensure_destination(&request.destination, request.overwrite_existing).await?;
-        emit(&progress, &request, DownloadStatus::Probing, 0, None);
+        emit(&progress, &request, DownloadStatus::Probing, 0, None).await;
 
         let probe = tokio::select! {
             _ = control.cancelled() => return Err(Error::Cancelled),
@@ -303,7 +303,8 @@ impl DownloadEngine {
             DownloadStatus::Downloading,
             downloaded,
             probe.total_bytes,
-        );
+        )
+        .await;
 
         let mut stream = response.bytes_stream();
         loop {
@@ -333,7 +334,8 @@ impl DownloadEngine {
                 DownloadStatus::Downloading,
                 downloaded,
                 probe.total_bytes,
-            );
+            )
+            .await;
         }
         file.flush().await?;
         file.sync_all().await?;
@@ -421,7 +423,8 @@ impl DownloadEngine {
             DownloadStatus::Downloading,
             initial_downloaded,
             probe.total_bytes,
-        );
+        )
+        .await;
 
         let transfers = ranges.iter().copied().enumerate().map(|(index, range)| {
             download_segment(
@@ -617,7 +620,8 @@ async fn download_segment(
             DownloadStatus::Downloading,
             aggregate,
             Some(total),
-        );
+        )
+        .await;
     }
     output.flush().await?;
     output.sync_all().await?;
@@ -665,7 +669,8 @@ async fn finish_download(
         DownloadStatus::Verifying,
         downloaded,
         total_bytes,
-    );
+    )
+    .await;
     let sha256 = hash_file(partial_path, control).await?;
     if request
         .expected_sha256
@@ -691,7 +696,8 @@ async fn finish_download(
         DownloadStatus::Completed,
         downloaded,
         total_bytes,
-    );
+    )
+    .await;
     Ok(DownloadResult {
         bytes_written: downloaded,
         sha256,
@@ -788,19 +794,24 @@ async fn remove_segment_files(partial_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn emit(
+async fn emit(
     sender: &mpsc::Sender<ProgressEvent>,
     request: &DownloadRequest,
     status: DownloadStatus,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
 ) {
-    let _ = sender.try_send(ProgressEvent {
+    let event = ProgressEvent {
         id: request.id,
         status,
         downloaded_bytes,
         total_bytes,
-    });
+    };
+    if status == DownloadStatus::Downloading {
+        let _ = sender.try_send(event);
+    } else {
+        let _ = sender.send(event).await;
+    }
 }
 
 fn header_u64(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
@@ -1020,12 +1031,12 @@ mod tests {
     use url::Url;
 
     use super::{
-        ByteRange, ContentRange, ProbeResult, can_resume, download_segment, parse_content_range,
-        parse_content_range_total, plan_segments, status_error,
+        ByteRange, ContentRange, ProbeResult, can_resume, download_segment, emit,
+        parse_content_range, parse_content_range_total, plan_segments, status_error,
     };
     use crate::{
-        DownloadControl, DownloadRequest, Error, HostConnectionPolicy, ProgressEvent,
-        state::PartialState,
+        DownloadControl, DownloadRequest, DownloadStatus, Error, HostConnectionPolicy,
+        ProgressEvent, state::PartialState,
     };
 
     #[test]
@@ -1188,6 +1199,42 @@ mod tests {
         ] {
             assert!(status_error("segment download", status).is_retryable());
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_progress_waits_for_channel_capacity() {
+        let request = DownloadRequest::new(
+            Url::parse("https://example.test/file").expect("fixture URL"),
+            Path::new("C:/Downloads/file"),
+        );
+        let (sender, mut receiver) = mpsc::channel(1);
+        emit(&sender, &request, DownloadStatus::Downloading, 1, Some(2)).await;
+        let completion = tokio::spawn({
+            let sender = sender.clone();
+            let request = request.clone();
+            async move {
+                emit(&sender, &request, DownloadStatus::Completed, 2, Some(2)).await;
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!completion.is_finished());
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("progress should be queued")
+                .status,
+            DownloadStatus::Downloading
+        );
+        completion.await.expect("completion task should finish");
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("completion should be queued")
+                .status,
+            DownloadStatus::Completed
+        );
     }
 
     #[test]

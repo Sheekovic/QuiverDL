@@ -168,13 +168,28 @@ jobs:
         if: runner.os != 'Windows'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           stage="$RUNNER_TEMP/quiver-native-host-${{ matrix.target }}"
           mkdir -p "$stage"
           cp "target/${{ matrix.target }}/release/quiver-native-host" "$stage/"
           cp -R extensions "$stage/"
           cp LICENSE README.md "$stage/"
-          archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.tar.gz"
-          tar -C "$RUNNER_TEMP" -czf "$archive" "$(basename "$stage")"
-          shasum -a 256 "$archive" > "$archive.sha256"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.zip"
+            ditto -c -k --keepParent "$stage" "$archive"
+            xcrun notarytool submit "$archive" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+          else
+            archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.tar.gz"
+            tar -C "$RUNNER_TEMP" -czf "$archive" "$(basename "$stage")"
+          fi
+          archive_dir=$(dirname "$archive")
+          archive_name=$(basename "$archive")
+          (cd "$archive_dir" && shasum -a 256 "$archive_name") > "$archive.sha256"
           gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber

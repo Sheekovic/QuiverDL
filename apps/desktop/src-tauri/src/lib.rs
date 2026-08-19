@@ -12,7 +12,7 @@ use quiver_core::{
 };
 use serde::Serialize;
 use tauri::{
-    Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, State, WindowEvent,
     ipc::Channel,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -25,6 +25,11 @@ mod persistence;
 
 use browser_bridge::{acknowledge_browser_request, get_browser_bridge_info, list_browser_requests};
 use persistence::{AppSettings, PersistentStore, load_app_state, save_app_state};
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
 
 #[derive(Default)]
 struct TransferRegistry {
@@ -397,7 +402,11 @@ pub fn run() {
                                 let _ = window.set_focus();
                             }
                         }
-                        "quit" => app.exit(0),
+                        "quit" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.emit("quit-requested", ());
+                            }
+                        }
                         _ => {}
                     });
             if let Some(icon) = app.default_window_icon() {
@@ -422,7 +431,8 @@ pub fn run() {
             save_app_state,
             get_browser_bridge_info,
             list_browser_requests,
-            acknowledge_browser_request
+            acknowledge_browser_request,
+            quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

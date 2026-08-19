@@ -1,4 +1,5 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import {
   isPermissionGranted,
@@ -195,6 +196,7 @@ function App() {
   const saveInFlight = useRef(false);
   const saveAgain = useRef(false);
   const latestSnapshot = useRef<AppSnapshot | null>(null);
+  const quitInProgress = useRef(false);
   const t = (key: MessageKey) => translate(settings.language, key);
 
   useEffect(() => {
@@ -249,7 +251,12 @@ function App() {
         totalBytes: item.totalBytes?.toString() ?? null,
       })),
     };
-    if (!stateLoaded.current || saveTimer.current !== null) return;
+    if (
+      !stateLoaded.current ||
+      quitInProgress.current ||
+      saveTimer.current !== null
+    )
+      return;
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
       if (saveInFlight.current) {
@@ -280,6 +287,38 @@ function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    let active = true;
+    let stopListening: (() => void) | undefined;
+    void listen("quit-requested", async () => {
+      if (!active || quitInProgress.current) return;
+      quitInProgress.current = true;
+      if (saveTimer.current !== null) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      try {
+        while (saveInFlight.current) {
+          await new Promise((resolve) => window.setTimeout(resolve, 25));
+        }
+        if (latestSnapshot.current) {
+          await invoke("save_app_state", { snapshot: latestSnapshot.current });
+        }
+        await invoke("quit_app");
+      } catch (cause) {
+        quitInProgress.current = false;
+        setError(String(cause));
+      }
+    }).then((unlisten) => {
+      if (active) stopListening = unlisten;
+      else unlisten();
+    });
+    return () => {
+      active = false;
+      stopListening?.();
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme;
