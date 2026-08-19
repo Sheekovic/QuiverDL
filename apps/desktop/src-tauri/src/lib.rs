@@ -208,7 +208,11 @@ fn validate_destination(destination: &str) -> Result<PathBuf, String> {
     if !destination.is_absolute() || destination.file_name().is_none() {
         return Err("The download destination must be an absolute file path".into());
     }
-    Ok(normalize_path(&destination))
+    let destination = normalize_path(&destination);
+    if !destination.is_absolute() || destination.file_name().is_none() {
+        return Err("The normalized download destination must be an absolute file path".into());
+    }
+    Ok(destination)
 }
 
 async fn prepare_destination(destination: &str) -> Result<PreparedDestination, String> {
@@ -251,7 +255,9 @@ fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                let _ = normalized.pop();
+                if normalized.file_name().is_some() {
+                    let _ = normalized.pop();
+                }
             }
             component => normalized.push(component.as_os_str()),
         }
@@ -321,6 +327,18 @@ mod tests {
         };
         assert!(validate_destination(absolute).is_ok());
         assert!(validate_destination("archive.zip").is_err());
+
+        let root_escape = if cfg!(windows) {
+            r"C:\..\archive.zip"
+        } else {
+            "/../archive.zip"
+        };
+        let normalized = validate_destination(root_escape).expect("root escape stays absolute");
+        assert!(normalized.is_absolute());
+        assert_eq!(
+            normalized.file_name(),
+            Some(std::ffi::OsStr::new("archive.zip"))
+        );
     }
 
     #[tokio::test]

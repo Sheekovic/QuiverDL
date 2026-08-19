@@ -64,7 +64,8 @@ async fn resumes_only_from_the_requested_content_range() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
     write_resume_files(directory.path(), &url).await;
-    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
 
     let result = DownloadEngine::new()
         .expect("engine should initialize")
@@ -94,7 +95,8 @@ async fn rejects_a_mismatched_resume_range_without_appending() {
     let destination = directory.path().join("fixture.bin");
     let partial = directory.path().join("fixture.bin.quiver-part");
     write_resume_files(directory.path(), &url).await;
-    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
 
     let error = DownloadEngine::new()
         .expect("engine should initialize")
@@ -132,7 +134,8 @@ async fn rejects_a_short_unknown_length_resume_span() {
     let destination = directory.path().join("fixture.bin");
     let partial = directory.path().join("fixture.bin.quiver-part");
     write_unknown_length_resume_files(directory.path(), &url).await;
-    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
 
     let error = DownloadEngine::new()
         .expect("engine should initialize")
@@ -163,7 +166,8 @@ async fn cancellation_interrupts_a_stalled_response() {
     let (url, server, started, release) = stalled_fixture_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
-    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
     let control = DownloadControl::new();
     let cancellation = control.clone();
     let transfer = tokio::spawn({
