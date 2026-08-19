@@ -29,8 +29,9 @@ impl Drop for HostPermit {
         let previous = self.state.active.fetch_sub(1, Ordering::AcqRel);
         self.state.changed.notify_one();
         if previous == 1
-            && Arc::strong_count(&self.state) == 2
             && let Ok(mut hosts) = self.hosts.try_lock()
+            && self.state.active.load(Ordering::Acquire) == 0
+            && Arc::strong_count(&self.state) == 2
             && hosts
                 .get(&self.origin)
                 .is_some_and(|state| Arc::ptr_eq(state, &self.state))
@@ -89,12 +90,15 @@ impl HostConnectionPolicy {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    };
 
     use tokio::time::timeout;
     use url::Url;
 
-    use super::HostConnectionPolicy;
+    use super::{HostConnectionPolicy, HostPermit};
 
     #[tokio::test]
     async fn enforces_and_releases_an_origin_cap() {
@@ -124,5 +128,32 @@ mod tests {
             drop(policy.acquire(&url, 1).await.expect("permit"));
         }
         assert_eq!(policy.hosts.lock().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn does_not_evict_state_cloned_by_a_concurrent_acquirer() {
+        let policy = HostConnectionPolicy::default();
+        let url = Url::parse("https://example.test/file").expect("fixture URL");
+        let first = policy.acquire(&url, 1).await.expect("first permit");
+        let origin = "https://example.test:443".to_string();
+        let acquiring_state = {
+            let hosts = policy.hosts.lock().await;
+            Arc::clone(hosts.get(&origin).expect("origin state"))
+        };
+
+        drop(first);
+        assert!(policy.hosts.lock().await.contains_key(&origin));
+        acquiring_state.active.fetch_add(1, Ordering::AcqRel);
+        let second = HostPermit {
+            origin,
+            state: acquiring_state,
+            hosts: Arc::clone(&policy.hosts),
+        };
+        assert!(
+            timeout(Duration::from_millis(20), policy.acquire(&url, 1))
+                .await
+                .is_err()
+        );
+        drop(second);
     }
 }
