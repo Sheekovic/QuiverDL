@@ -7,5 +7,3 @@
 .vscode/
 .DS_Store
 Thumbs.db
-apps/desktop/src-tauri/store/Entitlements.plist
-apps/desktop/src-tauri/store/embedded.provisionprofile

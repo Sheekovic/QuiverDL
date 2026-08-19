@@ -3,9 +3,10 @@
 QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. The workflow uses locked Cargo and npm dependency graphs, builds on each target operating system, creates Windows NSIS/MSI installers plus a portable archive, Linux DEB/RPM/AppImage packages, macOS app/DMG bundles for Intel and Apple Silicon, and native-host archives with portable SHA-256 checksum files. Standalone macOS host archives are submitted to Apple notarization after the host is signed. Releases begin as drafts so a maintainer can inspect every asset before publishing.
 
 The same tagged workflow creates deterministic unsigned Chrome Web Store and Firefox AMO submission
-archives. Microsoft Store and Mac App Store overlays, sandbox entitlements, validation, and owner
-submission commands are documented in [store packaging](STORE_PACKAGING.md). Store accounts,
-provisioning profiles, and marketplace signatures remain owner-controlled release inputs.
+archives. Microsoft Store and strict-confined Snap Store packaging, validation, and owner submission
+commands are documented in [store packaging](STORE_PACKAGING.md). Store accounts and marketplace
+signatures remain owner-controlled release inputs. Mac App Store packaging remains gated on durable
+security-scoped bookmark support for restart-safe destinations.
 
 Windows users who install the NSIS or MSI desktop package and want browser integration must also download the matching `native-host-x86_64-pc-windows-msvc.zip`, then run its `extensions/native-host/install-windows.ps1` script against the included signed host. The portable archive already contains the same host and registration assets.
 

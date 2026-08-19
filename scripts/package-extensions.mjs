@@ -115,8 +115,17 @@ function validateManifest(browser, manifest) {
   if (!manifest.description || manifest.description.length > 132) {
     throw new Error(`${browser}: description must contain 1-132 characters`);
   }
-  if (browser === "firefox" && !manifest.browser_specific_settings?.gecko?.id) {
-    throw new Error("firefox: browser_specific_settings.gecko.id is required for signing");
+  if (browser === "firefox") {
+    const gecko = manifest.browser_specific_settings?.gecko;
+    if (!gecko?.id) {
+      throw new Error("firefox: browser_specific_settings.gecko.id is required for signing");
+    }
+    if (
+      gecko.data_collection_permissions?.required?.length !== 1 ||
+      gecko.data_collection_permissions.required[0] !== "none"
+    ) {
+      throw new Error('firefox: privacy-preserving packages must declare required: ["none"]');
+    }
   }
 }
 

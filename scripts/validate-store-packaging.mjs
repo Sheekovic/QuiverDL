@@ -14,25 +14,10 @@ const microsoft = await readJson(
   "src-tauri",
   "tauri.microsoftstore.conf.json",
 );
-const appStore = await readJson("apps", "desktop", "src-tauri", "tauri.appstore.conf.json");
 const chromium = await readJson("extensions", "chromium", "manifest.json");
 const firefox = await readJson("extensions", "firefox", "manifest.json");
-const entitlements = await readFile(
-  path.join(
-    repository,
-    "apps",
-    "desktop",
-    "src-tauri",
-    "store",
-    "Entitlements.plist.template",
-  ),
-  "utf8",
-);
-const info = await readFile(
-  path.join(repository, "apps", "desktop", "src-tauri", "Info.plist"),
-  "utf8",
-);
 const cargoWorkspace = await readFile(path.join(repository, "Cargo.toml"), "utf8");
+const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
 
 assert.equal(chromium.manifest_version, 3);
 assert.equal(firefox.manifest_version, 3);
@@ -45,17 +30,25 @@ assert.match(
   "Cargo workspace and Tauri versions must match",
 );
 assert.ok(firefox.browser_specific_settings?.gecko?.id, "Firefox signing requires a stable add-on ID");
+assert.equal(
+  firefox.browser_specific_settings.gecko.strict_min_version,
+  "140.0",
+  "Firefox data-collection declarations require Firefox 140 or newer",
+);
+assert.deepEqual(
+  firefox.browser_specific_settings.gecko.data_collection_permissions?.required,
+  ["none"],
+  "Firefox must declare that it collects and transmits no data",
+);
 assert.equal(microsoft.bundle.windows.webviewInstallMode.type, "offlineInstaller");
 assert.notEqual(microsoft.bundle.publisher, desktop.productName);
-assert.equal(appStore.bundle.category, "Utility");
-assert.equal(appStore.bundle.macOS.entitlements, "./store/Entitlements.plist");
-assert.match(entitlements, /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/);
-assert.match(entitlements, /<key>com\.apple\.security\.network\.client<\/key>\s*<true\/>/);
 assert.match(
-  entitlements,
-  /<key>com\.apple\.security\.files\.user-selected\.read-write<\/key>\s*<true\/>/,
+  snapcraft,
+  new RegExp(`^version: ['"]${desktop.version.replaceAll(".", "\\.")}['"]$`, "m"),
+  "Snap and desktop versions must match",
 );
-assert.equal((entitlements.match(/__TEAM_ID__/g) ?? []).length, 2);
-assert.match(info, /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/);
+assert.match(snapcraft, /^confinement: strict$/m);
+assert.match(snapcraft, /^\s+- home$/m);
+assert.match(snapcraft, /^\s+- network$/m);
 
 process.stdout.write("Store packaging configuration is internally consistent.\n");
