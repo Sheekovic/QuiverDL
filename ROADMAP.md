@@ -49,7 +49,7 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 ## Next cycle
 
 - [x] Proxy configuration and credential-safe proxy authentication
-- Scheduled and sequential queues
+- [x] Scheduled and sequential queues
 - Metalink and BitTorrent evaluation behind separate threat models
 - Store packaging for browser extensions and operating-system app stores
 - Automated updater design with rollback and signature verification

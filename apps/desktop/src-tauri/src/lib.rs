@@ -1,9 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     path::{Component, Path, PathBuf},
-    sync::Mutex,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use quiver_core::{
@@ -17,7 +17,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use url::Url;
 
 mod browser_bridge;
@@ -39,6 +39,7 @@ struct TransferRegistry {
     transfers: Mutex<HashMap<String, ActiveTransfer>>,
     global_limiter: BandwidthLimiter,
     host_policy: HostConnectionPolicy,
+    sequential_queue: Arc<SequentialQueue>,
 }
 
 impl Default for TransferRegistry {
@@ -47,6 +48,7 @@ impl Default for TransferRegistry {
             transfers: Mutex::default(),
             global_limiter: BandwidthLimiter::unlimited(),
             host_policy: HostConnectionPolicy::default(),
+            sequential_queue: Arc::new(SequentialQueue::default()),
         }
     }
 }
@@ -55,6 +57,106 @@ impl Default for TransferRegistry {
 struct ActiveTransfer {
     control: DownloadControl,
     reservation_keys: HashSet<String>,
+    queue_ticket: Option<u64>,
+    scheduled_for_ms: Option<u64>,
+    started: bool,
+}
+
+#[derive(Default)]
+struct SequentialQueue {
+    state: Mutex<SequentialQueueState>,
+    changed: Notify,
+}
+
+#[derive(Default)]
+struct SequentialQueueState {
+    active_ticket: Option<u64>,
+    entries: BTreeMap<u64, Option<u64>>,
+}
+
+impl SequentialQueue {
+    fn register(&self, ticket: u64, scheduled_for_ms: Option<u64>) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "The sequential queue is unavailable".to_string())?;
+        match state.entries.entry(ticket) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(scheduled_for_ms);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                return Err("A download with this queue sequence is already registered".into());
+            }
+        }
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    fn remove(&self, ticket: u64) {
+        if let Ok(mut state) = self.state.lock() {
+            state.entries.remove(&ticket);
+            if state.active_ticket == Some(ticket) {
+                state.active_ticket = None;
+            }
+        }
+        self.changed.notify_waiters();
+    }
+
+    async fn acquire(
+        self: &Arc<Self>,
+        ticket: u64,
+        control: &DownloadControl,
+    ) -> Result<SequentialPermit, String> {
+        loop {
+            let changed = self.changed.notified();
+            {
+                let now = unix_time_ms()?;
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "The sequential queue is unavailable".to_string())?;
+                let is_next_ready =
+                    state
+                        .entries
+                        .iter()
+                        .find_map(|(candidate, scheduled_for_ms)| {
+                            scheduled_for_ms
+                                .is_none_or(|scheduled| scheduled <= now)
+                                .then_some(*candidate)
+                        })
+                        == Some(ticket);
+                if state.active_ticket.is_none() && is_next_ready {
+                    state.active_ticket = Some(ticket);
+                    return Ok(SequentialPermit {
+                        queue: self.clone(),
+                        ticket,
+                    });
+                }
+                if !state.entries.contains_key(&ticket) {
+                    return Err("This download is no longer registered".into());
+                }
+            }
+            tokio::select! {
+                _ = control.cancelled() => {
+                    self.remove(ticket);
+                    return Err("download was cancelled".into());
+                }
+                () = changed => {}
+            }
+        }
+    }
+}
+
+struct SequentialPermit {
+    queue: Arc<SequentialQueue>,
+    ticket: u64,
+}
+
+impl Drop for SequentialPermit {
+    fn drop(&mut self) {
+        self.queue.remove(self.ticket);
+    }
 }
 
 struct PreparedDestination {
@@ -119,19 +221,115 @@ async fn inspect_url(url: String, settings: Option<AppSettings>) -> Result<LinkI
 }
 
 #[tauri::command]
+fn register_download(
+    registry: State<'_, TransferRegistry>,
+    task_id: String,
+    queue_mode: String,
+    queue_sequence: String,
+    scheduled_for_ms: Option<String>,
+) -> Result<(), String> {
+    let task_id = validate_task_id(&task_id)?;
+    if !matches!(queue_mode.as_str(), "parallel" | "sequential") {
+        return Err("Unsupported queue mode".into());
+    }
+    let scheduled_for_ms = scheduled_for_ms
+        .as_deref()
+        .map(parse_queue_timestamp)
+        .transpose()?;
+    let queue_sequence = parse_queue_sequence(&queue_sequence)?;
+    let mut transfers = registry
+        .transfers
+        .lock()
+        .map_err(|_| "Download controls are unavailable".to_string())?;
+    if transfers.contains_key(&task_id) {
+        return Err("A download with this identifier is already registered".into());
+    }
+    let queue_ticket = if queue_mode == "sequential" {
+        registry
+            .sequential_queue
+            .register(queue_sequence, scheduled_for_ms)?;
+        Some(queue_sequence)
+    } else {
+        None
+    };
+    transfers.insert(
+        task_id,
+        ActiveTransfer {
+            control: DownloadControl::new(),
+            reservation_keys: HashSet::new(),
+            queue_ticket,
+            scheduled_for_ms,
+            started: false,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn discard_registered_download(
+    registry: State<'_, TransferRegistry>,
+    task_id: String,
+) -> Result<(), String> {
+    let task_id = validate_task_id(&task_id)?;
+    let transfer = {
+        let mut transfers = registry
+            .transfers
+            .lock()
+            .map_err(|_| "Download controls are unavailable".to_string())?;
+        if transfers
+            .get(&task_id)
+            .is_some_and(|transfer| transfer.started)
+        {
+            return Err("This download has already started".into());
+        }
+        transfers.remove(&task_id)
+    };
+    if let Some(transfer) = transfer {
+        transfer.control.cancel();
+        if let Some(ticket) = transfer.queue_ticket {
+            registry.sequential_queue.remove(ticket);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_download(
     registry: State<'_, TransferRegistry>,
     task_id: String,
     url: String,
     destination: String,
     settings: Option<AppSettings>,
+    scheduled_for_ms: Option<String>,
     on_event: Channel<DownloadProgress>,
 ) -> Result<DownloadSummary, String> {
     let task_id = validate_task_id(&task_id)?;
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
-    let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
     settings.validate()?;
+    let requested_schedule = scheduled_for_ms
+        .as_deref()
+        .map(parse_queue_timestamp)
+        .transpose()?;
+    let (control, queue_ticket, scheduled_for_ms) = claim_registered_transfer(
+        &registry,
+        &task_id,
+        requested_schedule,
+        settings.queue_mode == "sequential",
+    )?;
+    let _cleanup = RegisteredTransferCleanup {
+        registry: &registry,
+        task_id: task_id.clone(),
+    };
+    let (destination, _queue_permit) = prepare_and_reserve_destination(
+        &registry,
+        &task_id,
+        &destination,
+        &control,
+        scheduled_for_ms,
+        queue_ticket,
+    )
+    .await?;
     let engine = DownloadEngine::new_with_proxy(proxy_policy(&settings).await?)
         .map_err(|error| error.to_string())?
         .with_global_limiter(Some(registry.global_limiter.clone()))
@@ -148,35 +346,6 @@ async fn start_download(
         min_segment_bytes: 8 * 1024 * 1024,
         per_download_speed_limit_bps: settings.per_download_speed_limit_bps,
     };
-    let control = DownloadControl::new();
-
-    {
-        let mut transfers = registry
-            .transfers
-            .lock()
-            .map_err(|_| "Download controls are unavailable".to_string())?;
-        if transfers.contains_key(&task_id) {
-            return Err("A download with this identifier is already active".into());
-        }
-        if transfers.values().any(|transfer| {
-            !transfer
-                .reservation_keys
-                .is_disjoint(&destination.reservation_keys)
-        }) {
-            return Err(
-                "Another active download is already using this destination or its recovery files"
-                    .into(),
-            );
-        }
-        transfers.insert(
-            task_id.clone(),
-            ActiveTransfer {
-                control: control.clone(),
-                reservation_keys: destination.reservation_keys,
-            },
-        );
-    }
-
     let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressEvent>(32);
     let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
@@ -198,9 +367,6 @@ async fn start_download(
     });
 
     let result = engine.download(request, control, progress_tx).await;
-    if let Ok(mut transfers) = registry.transfers.lock() {
-        transfers.remove(&task_id);
-    }
     let _ = forwarder.await;
 
     let result = result.map_err(|error| error.to_string())?;
@@ -213,6 +379,182 @@ async fn start_download(
             .collect(),
         resumed: result.resumed,
     })
+}
+
+const MAX_QUEUE_TIMESTAMP_MS: u64 = 32_503_680_000_000;
+const MAX_SCHEDULE_SLEEP: Duration = Duration::from_secs(30);
+
+pub(crate) fn parse_queue_timestamp(value: &str) -> Result<u64, String> {
+    if value.is_empty() || value.len() > 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("A queue timestamp is invalid".into());
+    }
+    let timestamp = value
+        .parse::<u64>()
+        .map_err(|_| "A queue timestamp is invalid".to_string())?;
+    if timestamp > MAX_QUEUE_TIMESTAMP_MS {
+        return Err("A queue timestamp is outside the supported range".into());
+    }
+    Ok(timestamp)
+}
+
+pub(crate) fn parse_queue_sequence(value: &str) -> Result<u64, String> {
+    if value.is_empty() || value.len() > 20 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("A queue sequence is invalid".into());
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| "A queue sequence is outside the supported range".to_string())
+}
+
+fn unix_time_ms() -> Result<u64, String> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "The system clock is before the Unix epoch".to_string())?
+        .as_millis();
+    u64::try_from(milliseconds)
+        .map_err(|_| "The system clock is outside the supported range".into())
+}
+
+fn schedule_sleep_duration(scheduled_for_ms: u64, now_ms: u64) -> Option<Duration> {
+    scheduled_for_ms
+        .checked_sub(now_ms)
+        .filter(|remaining| *remaining > 0)
+        .map(Duration::from_millis)
+        .map(|remaining| remaining.min(MAX_SCHEDULE_SLEEP))
+}
+
+async fn wait_for_queue_turn(
+    control: &DownloadControl,
+    scheduled_for_ms: Option<u64>,
+    queue_ticket: Option<u64>,
+    sequential_queue: Arc<SequentialQueue>,
+) -> Result<Option<SequentialPermit>, String> {
+    if let Some(scheduled_for_ms) = scheduled_for_ms {
+        loop {
+            let now = unix_time_ms()?;
+            let Some(delay) = schedule_sleep_duration(scheduled_for_ms, now) else {
+                break;
+            };
+            tokio::select! {
+                _ = control.cancelled() => return Err("download was cancelled".into()),
+                () = tokio::time::sleep(delay) => {}
+            }
+        }
+    }
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let Some(queue_ticket) = queue_ticket else {
+        return Ok(None);
+    };
+    let permit = sequential_queue.acquire(queue_ticket, control).await?;
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(permit))
+}
+
+async fn prepare_and_reserve_destination(
+    registry: &TransferRegistry,
+    task_id: &str,
+    destination: &str,
+    control: &DownloadControl,
+    scheduled_for_ms: Option<u64>,
+    queue_ticket: Option<u64>,
+) -> Result<(PreparedDestination, Option<SequentialPermit>), String> {
+    // Sequential work must own its FIFO turn before it can reserve a path. Otherwise a
+    // newer task whose filesystem preparation finishes first could reject the older task.
+    let queue_permit = wait_for_queue_turn(
+        control,
+        scheduled_for_ms,
+        queue_ticket,
+        registry.sequential_queue.clone(),
+    )
+    .await?;
+    let destination = prepare_destination(destination).await?;
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    {
+        let mut transfers = registry
+            .transfers
+            .lock()
+            .map_err(|_| "Download controls are unavailable".to_string())?;
+        if transfers.iter().any(|(id, transfer)| {
+            id != task_id
+                && !transfer
+                    .reservation_keys
+                    .is_disjoint(&destination.reservation_keys)
+        }) {
+            return Err(
+                "Another active download is already using this destination or its recovery files"
+                    .into(),
+            );
+        }
+        let transfer = transfers
+            .get_mut(task_id)
+            .ok_or_else(|| "This download is no longer registered".to_string())?;
+        transfer.reservation_keys = destination.reservation_keys.clone();
+    }
+
+    Ok((destination, queue_permit))
+}
+
+fn remove_transfer(registry: &TransferRegistry, task_id: &str) {
+    let ticket = registry
+        .transfers
+        .lock()
+        .ok()
+        .and_then(|mut transfers| transfers.remove(task_id))
+        .and_then(|transfer| transfer.queue_ticket);
+    if let Some(ticket) = ticket {
+        registry.sequential_queue.remove(ticket);
+    }
+}
+
+fn claim_registered_transfer(
+    registry: &TransferRegistry,
+    task_id: &str,
+    requested_schedule: Option<u64>,
+    sequential: bool,
+) -> Result<(DownloadControl, Option<u64>, Option<u64>), String> {
+    let mut transfers = registry
+        .transfers
+        .lock()
+        .map_err(|_| "Download controls are unavailable".to_string())?;
+    let transfer = transfers
+        .get_mut(task_id)
+        .ok_or_else(|| "Register this download before starting it".to_string())?;
+    if transfer.started {
+        return Err("This download has already started".into());
+    }
+    if transfer.scheduled_for_ms != requested_schedule
+        || transfer.queue_ticket.is_some() != sequential
+    {
+        return Err("The registered queue policy does not match this download".into());
+    }
+    transfer.started = true;
+    Ok((
+        transfer.control.clone(),
+        transfer.queue_ticket,
+        transfer.scheduled_for_ms,
+    ))
+}
+
+struct RegisteredTransferCleanup<'a> {
+    registry: &'a TransferRegistry,
+    task_id: String,
+}
+
+impl Drop for RegisteredTransferCleanup<'_> {
+    fn drop(&mut self) {
+        remove_transfer(self.registry, &self.task_id);
+    }
 }
 
 async fn proxy_policy(settings: &AppSettings) -> Result<ProxyPolicy, String> {
@@ -475,6 +817,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             inspect_url,
+            register_download,
+            discard_registered_download,
             start_download,
             control_download,
             set_global_speed_limit,
@@ -498,8 +842,11 @@ mod tests {
     use quiver_core::DownloadStatus;
 
     use super::{
-        AppSettings, DownloadProgress, prepare_destination, proxy_policy, sanitize_filename,
-        validate_destination, validate_task_id,
+        ActiveTransfer, AppSettings, DownloadProgress, SequentialQueue, TransferRegistry,
+        claim_registered_transfer, parse_queue_sequence, parse_queue_timestamp,
+        prepare_and_reserve_destination, prepare_destination, proxy_policy, remove_transfer,
+        sanitize_filename, schedule_sleep_duration, validate_destination, validate_task_id,
+        wait_for_queue_turn,
     };
 
     #[test]
@@ -507,6 +854,239 @@ mod tests {
         assert_eq!(validate_task_id("download-42"), Ok("download-42".into()));
         assert!(validate_task_id("../download").is_err());
         assert!(validate_task_id("").is_err());
+    }
+
+    #[test]
+    fn validates_queue_timestamps_without_lossy_number_conversion() {
+        assert_eq!(
+            parse_queue_timestamp("1770000000000"),
+            Ok(1_770_000_000_000)
+        );
+        assert!(parse_queue_timestamp("").is_err());
+        assert!(parse_queue_timestamp("1770.5").is_err());
+        assert!(parse_queue_timestamp("32503680000001").is_err());
+    }
+
+    #[test]
+    fn validates_lossless_queue_sequences() {
+        assert_eq!(parse_queue_sequence("18446744073709551615"), Ok(u64::MAX));
+        assert!(parse_queue_sequence("18446744073709551616").is_err());
+        assert!(parse_queue_sequence("1.5").is_err());
+    }
+
+    #[test]
+    fn duplicate_queue_sequence_does_not_replace_the_original_deadline() {
+        let queue = SequentialQueue::default();
+        queue.register(7, None).expect("original ticket");
+        assert!(queue.register(7, Some(32_503_680_000_000)).is_err());
+        let state = queue.state.lock().expect("queue state");
+        assert_eq!(state.entries.get(&7), Some(&None));
+    }
+
+    #[test]
+    fn schedule_waits_recheck_long_wall_clock_deadlines() {
+        assert_eq!(
+            schedule_sleep_duration(1_000_000, 1),
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(
+            schedule_sleep_duration(1_001, 1_000),
+            Some(std::time::Duration::from_millis(1))
+        );
+        assert_eq!(schedule_sleep_duration(1_000, 1_000), None);
+        assert_eq!(schedule_sleep_duration(999, 1_000), None);
+    }
+
+    #[test]
+    fn duplicate_start_cannot_claim_or_remove_the_active_registration() {
+        let registry = TransferRegistry::default();
+        registry
+            .sequential_queue
+            .register(0, None)
+            .expect("queue ticket");
+        let ticket = 0;
+        registry
+            .transfers
+            .lock()
+            .expect("transfer registry")
+            .insert(
+                "duplicate-start".into(),
+                ActiveTransfer {
+                    control: quiver_core::DownloadControl::new(),
+                    reservation_keys: std::collections::HashSet::new(),
+                    queue_ticket: Some(ticket),
+                    scheduled_for_ms: None,
+                    started: false,
+                },
+            );
+
+        claim_registered_transfer(&registry, "duplicate-start", None, true)
+            .expect("first start owns cleanup");
+        assert!(claim_registered_transfer(&registry, "duplicate-start", None, true).is_err());
+        let transfers = registry.transfers.lock().expect("transfer registry");
+        assert!(
+            transfers
+                .get("duplicate-start")
+                .is_some_and(|item| item.started)
+        );
+    }
+
+    #[tokio::test]
+    async fn sequential_queue_uses_registered_ticket_order() {
+        let queue = std::sync::Arc::new(SequentialQueue::default());
+        queue.register(0, None).expect("first ticket");
+        queue.register(1, None).expect("second ticket");
+        let first_ticket = 0;
+        let second_ticket = 1;
+        let second = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                queue
+                    .acquire(second_ticket, &quiver_core::DownloadControl::new())
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished());
+
+        let first = queue
+            .acquire(first_ticket, &quiver_core::DownloadControl::new())
+            .await
+            .expect("first permit");
+        assert!(!second.is_finished());
+
+        drop(first);
+        assert!(second.await.expect("queue waiter should join").is_ok());
+    }
+
+    #[tokio::test]
+    async fn older_sequential_ticket_reserves_a_shared_destination_first() {
+        let registry = std::sync::Arc::new(TransferRegistry::default());
+        registry
+            .sequential_queue
+            .register(0, None)
+            .expect("older ticket");
+        registry
+            .sequential_queue
+            .register(1, None)
+            .expect("newer ticket");
+        let older_control = quiver_core::DownloadControl::new();
+        let newer_control = quiver_core::DownloadControl::new();
+        {
+            let mut transfers = registry.transfers.lock().expect("transfer registry");
+            for (task_id, ticket, control) in [
+                ("older", 0, older_control.clone()),
+                ("newer", 1, newer_control.clone()),
+            ] {
+                transfers.insert(
+                    task_id.into(),
+                    ActiveTransfer {
+                        control,
+                        reservation_keys: std::collections::HashSet::new(),
+                        queue_ticket: Some(ticket),
+                        scheduled_for_ms: None,
+                        started: true,
+                    },
+                );
+            }
+        }
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("shared.bin");
+        let destination = destination.to_string_lossy().into_owned();
+
+        let newer = tokio::spawn({
+            let registry = registry.clone();
+            let destination = destination.clone();
+            async move {
+                prepare_and_reserve_destination(
+                    &registry,
+                    "newer",
+                    &destination,
+                    &newer_control,
+                    None,
+                    Some(1),
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!newer.is_finished());
+
+        let (_destination, older_permit) = prepare_and_reserve_destination(
+            &registry,
+            "older",
+            &destination,
+            &older_control,
+            None,
+            Some(0),
+        )
+        .await
+        .expect("older task should reserve first");
+        assert!(!newer.is_finished());
+
+        remove_transfer(&registry, "older");
+        drop(older_permit);
+        assert!(
+            newer
+                .await
+                .expect("newer task should join")
+                .expect("newer task should reserve after older cleanup")
+                .1
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_future_ticket_does_not_block_ready_work() {
+        let queue = std::sync::Arc::new(SequentialQueue::default());
+        queue
+            .register(0, Some(32_503_680_000_000))
+            .expect("future ticket");
+        queue.register(1, None).expect("ready ticket");
+        let ready = 1;
+        queue
+            .acquire(ready, &quiver_core::DownloadControl::new())
+            .await
+            .expect("ready work should acquire");
+    }
+
+    #[tokio::test]
+    async fn a_due_scheduled_ticket_blocks_newer_ready_work_before_preparation_finishes() {
+        let queue = std::sync::Arc::new(SequentialQueue::default());
+        queue.register(0, Some(0)).expect("older due ticket");
+        queue.register(1, None).expect("newer ready ticket");
+        let newer = 1;
+        let waiter = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                queue
+                    .acquire(newer, &quiver_core::DownloadControl::new())
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        waiter.abort();
+        let _ = waiter.await;
+    }
+
+    #[tokio::test]
+    async fn scheduled_wait_can_be_cancelled() {
+        let control = quiver_core::DownloadControl::new();
+        let waiter = tokio::spawn({
+            let control = control.clone();
+            async move {
+                wait_for_queue_turn(
+                    &control,
+                    Some(32_503_680_000_000),
+                    None,
+                    std::sync::Arc::new(SequentialQueue::default()),
+                )
+                .await
+            }
+        });
+        control.cancel();
+        assert!(waiter.await.expect("scheduled waiter should join").is_err());
     }
 
     #[tokio::test]

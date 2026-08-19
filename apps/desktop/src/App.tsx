@@ -26,6 +26,8 @@ type EngineStatus = "probing" | "retrying" | "downloading" | "verifying" | "comp
 type DownloadStatus =
   | EngineStatus
   | "starting"
+  | "queued"
+  | "scheduled"
   | "paused"
   | "cancelling"
   | "cancelled"
@@ -55,6 +57,9 @@ type DownloadItem = {
   resumed?: boolean;
   error?: string;
   recoverable?: boolean;
+  queuedAtMs: string;
+  scheduledForMs: string | null;
+  queueSequence: string | null;
 };
 
 type AppSettings = {
@@ -68,6 +73,7 @@ type AppSettings = {
   maxConnectionsPerHost: number;
   perDownloadSpeedLimitBps: number | null;
   globalSpeedLimitBps: number | null;
+  queueMode: "parallel" | "sequential";
   proxyMode: "disabled" | "system" | "custom";
   proxyUrl: string;
   proxyUsername: string;
@@ -107,6 +113,8 @@ type Filter = "all" | "active" | "completed" | "failed";
 
 const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "starting",
+  "queued",
+  "scheduled",
   "probing",
   "retrying",
   "downloading",
@@ -117,6 +125,8 @@ const ACTIVE_STATUSES = new Set<DownloadStatus>([
 
 const STATUS_LABELS: Record<DownloadStatus, string> = {
   starting: "Starting",
+  queued: "Queued",
+  scheduled: "Scheduled",
   probing: "Inspecting server",
   retrying: "Retrying",
   downloading: "Downloading",
@@ -139,6 +149,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   maxConnectionsPerHost: 8,
   perDownloadSpeedLimitBps: null,
   globalSpeedLimitBps: null,
+  queueMode: "parallel",
   proxyMode: "disabled",
   proxyUrl: "",
   proxyUsername: "",
@@ -202,6 +213,32 @@ function createTaskId() {
     `download-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function queueStatus(item: Pick<DownloadItem, "scheduledForMs">, settings: AppSettings) {
+  if (item.scheduledForMs !== null && Number(item.scheduledForMs) > Date.now()) {
+    return "scheduled" as const;
+  }
+  return settings.queueMode === "sequential" ? "queued" as const : "starting" as const;
+}
+
+function compareQueueOrder(left: DownloadItem, right: DownloadItem) {
+  if (left.queueSequence !== null && right.queueSequence !== null) {
+    const leftSequence = BigInt(left.queueSequence);
+    const rightSequence = BigInt(right.queueSequence);
+    if (leftSequence < rightSequence) return -1;
+    if (leftSequence > rightSequence) return 1;
+  }
+  return left.id.localeCompare(right.id);
+}
+
+const MAX_QUEUE_SEQUENCE = (1n << 64n) - 1n;
+
+function formatScheduledTime(timestamp: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(Number(timestamp)));
+}
+
 function App() {
   const [url, setUrl] = useState("");
   const [inspection, setInspection] = useState<LinkInspection | null>(null);
@@ -210,7 +247,10 @@ function App() {
   const [error, setError] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [choosingDestination, setChoosingDestination] = useState(false);
+  const [scheduledStart, setScheduledStart] = useState("");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const latestSettings = useRef(settings);
+  latestSettings.current = settings;
   const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
   const [reviewingBrowserRequest, setReviewingBrowserRequest] =
     useState<BrowserRequest | null>(null);
@@ -222,6 +262,19 @@ function App() {
   const [proxyCredentialsPresent, setProxyCredentialsPresent] = useState(false);
   const [proxyCredentialBusy, setProxyCredentialBusy] = useState(false);
   const stateLoaded = useRef(false);
+  const recoveryQueue = useRef<DownloadItem[]>([]);
+  const registeredDownloads = useRef(new Set<string>());
+  const pendingCancellations = useRef(new Set<string>());
+  const nextQueueSequence = useRef(0n);
+  const recoveryGate = useRef<{ promise: Promise<void>; release: () => void } | null>(null);
+  if (recoveryGate.current === null) {
+    let release: () => void = () => undefined;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    recoveryGate.current = { promise, release };
+  }
+  const [stateReady, setStateReady] = useState(false);
   const saveTimer = useRef<number | null>(null);
   const saveInFlight = useRef(false);
   const saveAgain = useRef(false);
@@ -236,24 +289,47 @@ function App() {
         if (!active) return;
         setSettings(snapshot.settings);
         setProxyDraft(proxyDraftFromSettings(snapshot.settings));
-        setDownloads(
-          snapshot.downloads.map((item) => ({
-            ...item,
-            downloadedBytes: BigInt(item.downloadedBytes),
-            totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
-            recoverable: item.status === "paused",
-          })),
-        );
+        const restored = snapshot.downloads.map((item) => ({
+          ...item,
+          downloadedBytes: BigInt(item.downloadedBytes),
+          totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
+          recoverable: item.status === "paused",
+        }));
+        nextQueueSequence.current = restored.reduce((next, item) => {
+          if (item.queueSequence === null) return next;
+          const sequence = BigInt(item.queueSequence);
+          return sequence >= next ? sequence + 1n : next;
+        }, 0n);
+        recoveryQueue.current = restored
+          .filter((item) => item.status === "queued" || item.status === "scheduled")
+          .sort(compareQueueOrder);
+        setDownloads(restored);
         stateLoaded.current = true;
+        setStateReady(true);
       })
       .catch((cause) => {
         if (active) setError(String(cause));
         stateLoaded.current = true;
+        setStateReady(true);
       });
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!stateReady) return;
+    const pending = recoveryQueue.current;
+    recoveryQueue.current = [];
+    void (async () => {
+      const registered: DownloadItem[] = [];
+      for (const item of pending) {
+        if (await registerDownload(item, settings)) registered.push(item);
+      }
+      recoveryGate.current?.release();
+      for (const item of registered) void executeDownload(item, settings);
+    })();
+  }, [stateReady]);
 
   useEffect(() => {
     let active = true;
@@ -276,7 +352,7 @@ function App() {
 
   useEffect(() => {
     latestSnapshot.current = {
-      schemaVersion: 1,
+      schemaVersion: 3,
       settings,
       downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
         ...item,
@@ -478,6 +554,12 @@ function App() {
 
   async function chooseDestination() {
     if (!inspection) return;
+    const scheduledTime = scheduledStart ? new Date(scheduledStart).getTime() : 0;
+    if (scheduledStart && (!Number.isFinite(scheduledTime) || scheduledTime <= Date.now())) {
+      setError("Choose a scheduled start time in the future, or clear the field to start now.");
+      return;
+    }
+    const scheduledForMs = scheduledStart ? Math.trunc(scheduledTime).toString() : null;
     setChoosingDestination(true);
     setError("");
     try {
@@ -492,7 +574,8 @@ function App() {
         reviewingBrowserRequest?.url === sourceUrl ? reviewingBrowserRequest.id : undefined;
       setUrl("");
       setInspection(null);
-      void runDownload(sourceUrl, destination, undefined, browserRequestId);
+      setScheduledStart("");
+      void runDownload(sourceUrl, destination, undefined, browserRequestId, scheduledForMs);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -505,17 +588,31 @@ function App() {
     destination: string,
     existingId?: string,
     browserRequestId?: string,
+    scheduledForMs: string | null = null,
   ) {
+    await recoveryGate.current?.promise;
+    const executionSettings = latestSettings.current;
     const id = existingId ?? createTaskId();
+    pendingCancellations.current.delete(id);
+    if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
+      setError("The durable queue sequence is exhausted; remove old entries and restart QuiverDL.");
+      return;
+    }
+    const queueSequence = nextQueueSequence.current.toString();
+    nextQueueSequence.current += 1n;
+    const queuedAtMs = Date.now().toString();
     const item: DownloadItem = {
       id,
       name: destinationName(destination),
       url: sourceUrl,
       destination,
-      status: "starting",
+      status: queueStatus({ scheduledForMs }, executionSettings),
       downloadedBytes: 0n,
       totalBytes: null,
       recoverable: false,
+      queuedAtMs,
+      scheduledForMs,
+      queueSequence,
     };
     setDownloads((current) =>
       existingId
@@ -530,8 +627,8 @@ function App() {
       totalBytes: storedItem.totalBytes?.toString() ?? null,
     };
     const currentSnapshot = latestSnapshot.current ?? {
-      schemaVersion: 1,
-      settings,
+      schemaVersion: 3,
+      settings: executionSettings,
       downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
         ...download,
         downloadedBytes: download.downloadedBytes.toString(),
@@ -539,8 +636,8 @@ function App() {
       })),
     };
     const snapshot: AppSnapshot = {
-      schemaVersion: 1,
-      settings,
+      schemaVersion: 3,
+      settings: executionSettings,
       downloads: currentSnapshot.downloads.some((download) => download.id === item.id)
         ? currentSnapshot.downloads.map((download) =>
             download.id === item.id ? storedStartingItem : download,
@@ -563,6 +660,8 @@ function App() {
       return;
     }
 
+    if (!(await registerDownload(item, executionSettings))) return;
+
     if (browserRequestId) {
       try {
         await invoke("acknowledge_browser_request", { id: browserRequestId });
@@ -575,8 +674,72 @@ function App() {
       }
     }
 
+    void executeDownload(item, executionSettings);
+  }
+
+  async function registerDownload(item: DownloadItem, executionSettings: AppSettings) {
+    if (pendingCancellations.current.has(item.id)) {
+      pendingCancellations.current.delete(item.id);
+      updateDownload(item.id, { status: "cancelled", error: undefined });
+      return false;
+    }
+    try {
+      await invoke("register_download", {
+        taskId: item.id,
+        queueMode: executionSettings.queueMode,
+        queueSequence: item.queueSequence,
+        scheduledForMs: item.scheduledForMs,
+      });
+      registeredDownloads.current.add(item.id);
+      if (pendingCancellations.current.has(item.id)) {
+        await invoke("discard_registered_download", { taskId: item.id });
+        registeredDownloads.current.delete(item.id);
+        pendingCancellations.current.delete(item.id);
+        updateDownload(item.id, { status: "cancelled", error: undefined });
+        return false;
+      }
+      return true;
+    } catch (cause) {
+      registeredDownloads.current.delete(item.id);
+      void invoke("discard_registered_download", { taskId: item.id });
+      pendingCancellations.current.delete(item.id);
+      updateDownload(item.id, { status: "failed", error: String(cause) });
+      return false;
+    }
+  }
+
+  async function executeDownload(item: DownloadItem, executionSettings: AppSettings) {
+    const { id, url: sourceUrl, destination } = item;
+    updateDownload(id, {
+      status: queueStatus(item, executionSettings),
+      error: undefined,
+      recoverable: false,
+    });
+
+    let dueTimer: number | null = null;
+    const clearDueTimer = () => {
+      if (dueTimer !== null) {
+        window.clearTimeout(dueTimer);
+        dueTimer = null;
+      }
+    };
+    if (executionSettings.queueMode === "sequential" && item.scheduledForMs !== null) {
+      const refreshDueStatus = () => {
+        const remainingMs = Number(item.scheduledForMs) - Date.now();
+        if (remainingMs <= 0) {
+          updateDownload(id, (current) =>
+            current.status === "scheduled" ? { status: "queued" } : {},
+          );
+          return;
+        }
+        dueTimer = window.setTimeout(refreshDueStatus, Math.min(remainingMs, 30_000));
+      };
+      refreshDueStatus();
+    }
+
     const onEvent = new Channel<DownloadProgress>();
     onEvent.onmessage = (message) => {
+      clearDueTimer();
       updateDownload(id, (current) => ({
         status:
           current.status === "paused" ||
@@ -594,7 +757,8 @@ function App() {
         taskId: id,
         url: sourceUrl,
         destination,
-        settings,
+        settings: executionSettings,
+        scheduledForMs: item.scheduledForMs,
         onEvent,
       });
       updateDownload(id, {
@@ -604,7 +768,7 @@ function App() {
         sha256: summary.sha256,
         resumed: summary.resumed,
       });
-      if (settings.notifications) {
+      if (executionSettings.notifications) {
         void notifyCompleted(destinationName(destination));
       }
     } catch (cause) {
@@ -617,11 +781,15 @@ function App() {
           error: cancelled ? undefined : failure,
         };
       });
+    } finally {
+      clearDueTimer();
+      registeredDownloads.current.delete(id);
+      void invoke("discard_registered_download", { taskId: id });
     }
   }
 
   function retryDownload(item: DownloadItem) {
-    void runDownload(item.url, item.destination, item.id);
+    void runDownload(item.url, item.destination, item.id, undefined, null);
   }
 
   function reviewBrowserRequest(request: BrowserRequest) {
@@ -687,6 +855,11 @@ function App() {
 
   async function controlDownload(item: DownloadItem, action: "pause" | "resume" | "cancel") {
     setError("");
+    if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
+      pendingCancellations.current.add(item.id);
+      updateDownload(item.id, { status: "cancelling", error: undefined });
+      return;
+    }
     try {
       await invoke("control_download", { taskId: item.id, action });
       updateDownload(item.id, {
@@ -760,6 +933,22 @@ function App() {
             Global limit (KiB/s, 0 = unlimited)
             <input type="number" min={0} step={128} value={settings.globalSpeedLimitBps === null ? 0 : Math.round(settings.globalSpeedLimitBps / 1024)} onChange={(event) => { const value = Math.max(0, Number(event.target.value)); setSettings((current) => ({ ...current, globalSpeedLimitBps: value === 0 ? null : value * 1024 })); }} />
           </label>
+          <label>
+            Queue mode
+            <select
+              value={settings.queueMode}
+              onChange={(event) => setSettings((current) => ({
+                ...current,
+                queueMode: event.target.value as AppSettings["queueMode"],
+              }))}
+            >
+              <option value="parallel">Parallel</option>
+              <option value="sequential">Sequential (FIFO)</option>
+            </select>
+          </label>
+          <small className="queue-help">
+            Sequential mode starts one queued download at a time. Scheduled items join the queue when due.
+          </small>
           <label className="checkbox-setting">
             <input type="checkbox" checked={settings.notifications} onChange={(event) => setSettings((current) => ({ ...current, notifications: event.target.checked }))} />
             {t("notifications")}
@@ -937,10 +1126,24 @@ function App() {
           {error && <p className="result error" role="alert">{error}</p>}
           {inspection && (
             <div className="inspection-card">
-              <div className="inspection-grid">
-                <div><span>File size</span><strong>{formatBytes(inspection.totalBytes === null ? null : BigInt(inspection.totalBytes))}</strong></div>
-                <div><span>Resume support</span><strong>{inspection.supportsRanges ? "Available" : "Unavailable"}</strong></div>
-                <div><span>Change validator</span><strong>{inspection.hasValidator ? "Protected" : "Not provided"}</strong></div>
+              <div className="inspection-details">
+                <div className="inspection-grid">
+                  <div><span>File size</span><strong>{formatBytes(inspection.totalBytes === null ? null : BigInt(inspection.totalBytes))}</strong></div>
+                  <div><span>Resume support</span><strong>{inspection.supportsRanges ? "Available" : "Unavailable"}</strong></div>
+                  <div><span>Change validator</span><strong>{inspection.hasValidator ? "Protected" : "Not provided"}</strong></div>
+                </div>
+                <label className="schedule-field" htmlFor="scheduled-start">
+                  Start later (optional)
+                  <input
+                    id="scheduled-start"
+                    type="datetime-local"
+                    step={60}
+                    max="3000-01-01T00:00"
+                    value={scheduledStart}
+                    onChange={(event) => setScheduledStart(event.currentTarget.value)}
+                  />
+                  <small>Uses your local time. Leave blank to queue immediately.</small>
+                </label>
               </div>
               <button className="primary save-button" type="button" onClick={chooseDestination} disabled={choosingDestination}>
                 {choosingDestination ? t("opening") : t("choose")}
@@ -1044,6 +1247,10 @@ function DownloadRow({ item, onControl, onRemove, onRetry }: { item: DownloadIte
           <span>{formatBytes(item.downloadedBytes)}{item.totalBytes !== null ? ` of ${formatBytes(item.totalBytes)}` : ""}</span>
           <span>{percentage === null ? "Size unknown" : `${percentage.toFixed(0)}%`}</span>
         </div>
+        {item.status === "scheduled" && item.scheduledForMs && (
+          <p className="queue-note">Starts {formatScheduledTime(item.scheduledForMs)}</p>
+        )}
+        {item.status === "queued" && <p className="queue-note">Waiting for the previous queued download</p>}
         {item.error && <p className="item-error" role="alert">{item.error}</p>}
         {item.status === "completed" && item.sha256 && (
           <p className="checksum" title={item.sha256}>SHA-256 {item.sha256.slice(0, 16)}...{item.resumed ? " (resumed)" : ""}</p>

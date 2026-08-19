@@ -244,6 +244,7 @@ input:focus { border-color: var(--accent); }
   align-items: stretch;
   margin-top: 16px;
 }
+.inspection-details { display: grid; gap: 12px; }
 .inspection-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -257,6 +258,26 @@ input:focus { border-color: var(--accent); }
 .inspection-grid span { color: var(--subtle); font-size: 10px; }
 .inspection-grid strong { color: var(--text); font-size: 12px; }
 .save-button { min-height: 52px; }
+.schedule-field {
+  display: grid;
+  grid-template-columns: minmax(130px, auto) minmax(210px, 1fr);
+  gap: 6px 12px;
+  align-items: center;
+  margin: 0;
+}
+.schedule-field input { padding: 9px 11px; }
+.schedule-field small {
+  grid-column: 2;
+  color: var(--subtle);
+  font-size: 9px;
+}
+.queue-help {
+  display: block;
+  margin: -5px 0 10px;
+  color: var(--subtle);
+  font-size: 9px;
+  line-height: 1.4;
+}
 
 .downloads-panel { min-height: 285px; margin-top: 18px; overflow: hidden; }
 .browser-inbox {
@@ -358,6 +379,7 @@ input:focus { border-color: var(--accent); }
   font-weight: 700;
 }
 .status-completed .status-pill { color: var(--success); }
+.status-queued .status-pill, .status-scheduled .status-pill { color: var(--accent); }
 .status-failed .status-pill, .status-cancelled .status-pill { color: var(--danger); }
 progress {
   width: 100%;
@@ -374,6 +396,7 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 20p
 progress::-moz-progress-bar { background: var(--accent); border-radius: 20px; }
 .status-completed progress::-webkit-progress-value { background: var(--success); }
 .download-meta { display: flex; justify-content: space-between; color: var(--subtle); font-size: 10px; }
+.queue-note { margin: 8px 0 0; color: var(--accent); font-size: 10px; }
 .item-error {
   margin: 9px 0 0;
   color: var(--danger);

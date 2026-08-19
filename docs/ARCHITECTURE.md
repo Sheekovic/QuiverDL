@@ -26,3 +26,4 @@ Desktop UI / future CLI / browser bridge
 4. Tauri desktop application
 5. Authenticated native-messaging browser bridge
 6. Explicit proxy routing with operating-system credential storage
+7. Durable scheduled starts and sequential queue coordination
