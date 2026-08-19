@@ -580,6 +580,16 @@ async fn download_segment(
     } {
         control.checkpoint().await?;
         let chunk = chunk?;
+        let chunk_bytes = u64::try_from(chunk.len())
+            .map_err(|_| Error::InvalidResponse("segment chunk size overflowed u64".into()))?;
+        let next_segment_bytes = segment_bytes
+            .checked_add(chunk_bytes)
+            .ok_or_else(|| Error::InvalidResponse("segment size overflowed u64".into()))?;
+        if next_segment_bytes > expected {
+            return Err(Error::InvalidResponse(format!(
+                "segment body exceeded its declared {expected}-byte range"
+            )));
+        }
         throttle(
             chunk.len(),
             download_limiter.as_ref(),
@@ -588,11 +598,8 @@ async fn download_segment(
         )
         .await?;
         output.write_all(&chunk).await?;
-        segment_bytes = segment_bytes
-            .checked_add(chunk.len() as u64)
-            .ok_or_else(|| Error::InvalidResponse("segment size overflowed u64".into()))?;
-        let aggregate =
-            downloaded.fetch_add(chunk.len() as u64, Ordering::Relaxed) + chunk.len() as u64;
+        segment_bytes = next_segment_bytes;
+        let aggregate = downloaded.fetch_add(chunk_bytes, Ordering::Relaxed) + chunk_bytes;
         emit(
             &progress,
             &request,
@@ -1252,6 +1259,66 @@ mod tests {
         assert_eq!(
             tokio::fs::read(path).await.expect("segment should read"),
             b"abcdefghij"
+        );
+        server.await.expect("fixture server should finish");
+    }
+
+    #[tokio::test]
+    async fn rejects_segment_bytes_beyond_the_validated_range_before_writing_them() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture server should bind");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            assert!(request.contains("range: bytes=4-9"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 7\r\nContent-Range: bytes 4-9/10\r\nConnection: close\r\n\r\nefghijX",
+                )
+                .await
+                .expect("response should write");
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("segment");
+        tokio::fs::write(&path, b"abcd")
+            .await
+            .expect("segment prefix should write");
+        let url = Url::parse(&format!("http://{address}/file")).expect("fixture URL");
+        let request = DownloadRequest::new(url.clone(), directory.path().join("file"));
+        let (progress, receiver) = mpsc::channel::<ProgressEvent>(8);
+        drop(receiver);
+
+        let error = download_segment(
+            reqwest::Client::new(),
+            url,
+            Some("segment-v1".into()),
+            10,
+            ByteRange { start: 0, end: 9 },
+            path.clone(),
+            4,
+            DownloadControl::new(),
+            request,
+            progress,
+            Arc::new(AtomicU64::new(4)),
+            None,
+            None,
+            HostConnectionPolicy::default(),
+            1,
+        )
+        .await
+        .expect_err("an oversized segment body must be rejected");
+
+        assert!(error.to_string().contains("exceeded its declared"));
+        assert_eq!(
+            tokio::fs::read(path).await.expect("segment should read"),
+            b"abcd"
         );
         server.await.expect("fixture server should finish");
     }

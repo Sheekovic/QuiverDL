@@ -190,6 +190,8 @@ function App() {
   const [choosingDestination, setChoosingDestination] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
+  const [reviewingBrowserRequest, setReviewingBrowserRequest] =
+    useState<BrowserRequest | null>(null);
   const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
   const stateLoaded = useRef(false);
   const saveTimer = useRef<number | null>(null);
@@ -399,9 +401,11 @@ function App() {
       if (!destination) return;
 
       const sourceUrl = inspection.sourceUrl;
+      const browserRequestId =
+        reviewingBrowserRequest?.url === sourceUrl ? reviewingBrowserRequest.id : undefined;
       setUrl("");
       setInspection(null);
-      void runDownload(sourceUrl, destination);
+      void runDownload(sourceUrl, destination, undefined, browserRequestId);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -409,7 +413,12 @@ function App() {
     }
   }
 
-  async function runDownload(sourceUrl: string, destination: string, existingId?: string) {
+  async function runDownload(
+    sourceUrl: string,
+    destination: string,
+    existingId?: string,
+    browserRequestId?: string,
+  ) {
     const id = existingId ?? createTaskId();
     const item: DownloadItem = {
       id,
@@ -421,12 +430,47 @@ function App() {
       totalBytes: null,
       recoverable: false,
     };
+    const nextDownloads = existingId
+      ? downloads.map((existing) => (existing.id === existingId ? item : existing))
+      : [item, ...downloads];
+    if (browserRequestId) {
+      const snapshot: AppSnapshot = {
+        schemaVersion: 1,
+        settings,
+        downloads: nextDownloads.map(({ recoverable: _recoverable, ...download }) => ({
+          ...download,
+          downloadedBytes: download.downloadedBytes.toString(),
+          totalBytes: download.totalBytes?.toString() ?? null,
+        })),
+      };
+      try {
+        await invoke("save_app_state", { snapshot });
+        latestSnapshot.current = snapshot;
+      } catch (cause) {
+        setError(`Could not durably queue the browser download: ${String(cause)}`);
+        return;
+      }
+    }
     setDownloads((current) =>
-      existingId
-        ? current.map((existing) => (existing.id === existingId ? item : existing))
-        : [item, ...current],
+      browserRequestId
+        ? nextDownloads
+        : existingId
+          ? current.map((existing) => (existing.id === existingId ? item : existing))
+          : [item, ...current],
     );
     setFilter("all");
+
+    if (browserRequestId) {
+      try {
+        await invoke("acknowledge_browser_request", { id: browserRequestId });
+        setBrowserRequests((current) =>
+          current.filter((request) => request.id !== browserRequestId),
+        );
+        setReviewingBrowserRequest(null);
+      } catch (cause) {
+        setError(`The download is safely queued, but its browser request remains: ${String(cause)}`);
+      }
+    }
 
     const onEvent = new Channel<DownloadProgress>();
     onEvent.onmessage = (message) => {
@@ -477,12 +521,11 @@ function App() {
     void runDownload(item.url, item.destination, item.id);
   }
 
-  async function reviewBrowserRequest(request: BrowserRequest) {
+  function reviewBrowserRequest(request: BrowserRequest) {
     setUrl(request.url);
     setInspection(null);
     setFilter("all");
-    await invoke("acknowledge_browser_request", { id: request.id });
-    setBrowserRequests((current) => current.filter((item) => item.id !== request.id));
+    setReviewingBrowserRequest(request);
   }
 
   async function revealBrowserBridge() {
@@ -611,6 +654,7 @@ function App() {
                 onChange={(event) => {
                   setUrl(event.currentTarget.value);
                   setInspection(null);
+                  setReviewingBrowserRequest(null);
                 }}
                 placeholder="https://example.com/archive.zip"
                 autoComplete="off"
