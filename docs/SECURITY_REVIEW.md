@@ -22,7 +22,8 @@ Review this checklist for changes touching transfers, paths, persistence, browse
 - BitTorrent changes stay outside the HTTP engine and separately review peer discovery, uploading,
   proxy coverage, private torrents, parser limits, path containment, strong v2 integrity, and stop
   semantics. V1-only inputs remain offline-inspector data and cannot start a transfer; recovered v2
-  pieces are rehashed before verified status is restored.
+  pieces are rehashed before verified status is restored. Initial network support is allowlisted to
+  HTTPS trackers/web seeds and outbound TCP peers.
 - New dependencies are justified, locked, maintained, and checked for advisories and license compatibility.
 - Release artifacts are produced only by the protected tag workflow, signed where required, checksummed, and manually inspected before a draft is published.
 

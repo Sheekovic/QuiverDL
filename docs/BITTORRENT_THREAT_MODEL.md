@@ -42,13 +42,15 @@ peers, or addresses aimed at local services.
   string length, file count, tracker count, piece count, and decoded total size. Reject non-canonical
   encodings when computing an info-hash; do not decode and re-encode ambiguous v1 metadata.
 - Treat names and paths as advisory. Reject absolute paths, traversal, empty components, drive/UNC
-  prefixes, reserved names, separators inside components, control characters, and normalized or
-  case-folded collisions.
+  prefixes, separators inside components, control characters, colons/alternate-data-stream syntax,
+  components ending in a dot or space, Windows device names even with extensions, and normalized or
+  case-folded collisions on every platform.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
 - Retain a trusted root directory handle and perform no-follow, handle-relative traversal and
   creation on every platform. Rechecking a path before creation is not sufficient against a local
-  symlink or reparse-point swap.
+  symlink or reparse-point swap. Compare stable identity for existing components so short-name or
+  filesystem-specific aliases cannot make selected paths share a target.
 - Accumulate all file and selected-file sizes with checked arithmetic, reject totals above
   `u64::MAX`, and preserve byte counts losslessly across backend, IPC, persistence, and UI layers.
 - For a local `.torrent` file, present the full file tree and exact selected byte total before
@@ -88,13 +90,17 @@ bytes without promoting them.
 - No tracker contact, DNS lookup, DHT lookup, local discovery, peer connection, listener, or port
   mapping occurs before confirmation. Browser interception for `.torrent` and magnet links remains
   disabled until a separate reviewed integration milestone.
+- The first networked backend accepts only HTTPS tracker URLs, optional HTTPS web-seed URLs, and
+  outbound TCP peer connections learned from an approved tracker. Reject HTTP, FTP, file,
+  WebSocket, UDP tracker, uTP, and every unknown or unreviewed scheme/transport before dispatch.
+  Each additional tracker, web-seed, or peer transport requires its own later review.
 - Resolve and classify every tracker, web-seed, direct-peer, DHT, peer-exchange, and local-discovery
   address before connecting. Loopback, link-local, private, and other special-use destinations are
   denied by default; metadata cannot grant access to them. Any local-network exception is an
   explicit per-torrent approval, and mixed public/private DNS answers fail closed.
 - HTTP tracker and web-seed redirects are bounded and re-enter address classification on every hop.
-  Resolution and the actual socket destination remain bound to the approved address class so DNS
-  rebinding cannot bypass the decision.
+  They must remain HTTPS on every hop. Resolution and the actual socket destination remain bound to
+  the approved address class so DNS rebinding cannot bypass the decision.
 - Incoming listeners, DHT, peer exchange, local service discovery, UPnP/NAT-PMP/PCP, UDP trackers,
   and seeding after completion are individually modeled features, not implicit defaults.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
@@ -124,8 +130,9 @@ Before implementation begins, a proposal must:
    enforcement of the selected privacy policy.
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
    for malicious messages, per-file and aggregate overflow, recovered-piece tampering, adversarial
-   symlink/reparse-point swaps, hash failure, cancellation, private torrents, special-use addresses,
-   mixed-address DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
+   symlink/reparse-point swaps, trailing-dot/space and alternate-data-stream aliases, scheme
+   rejection, hash failure, cancellation, private torrents, special-use addresses, mixed-address
+   DNS answers, redirect changes, DNS rebinding, and resource exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 

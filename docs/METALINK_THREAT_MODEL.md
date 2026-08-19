@@ -69,7 +69,9 @@ RFC 5854 allows relative directory components in a file name and explicitly forb
 QuiverDL applies stricter platform-aware containment:
 
 - Treat every name component as untrusted. Reject empty components, `.`, `..`, absolute paths,
-  drive or UNC prefixes, NUL/control characters, alternate separators, and Windows reserved names.
+  drive or UNC prefixes, NUL/control characters, alternate separators, colons/alternate-data-stream
+  syntax, components ending in a dot or space, and Windows device names even when followed by an
+  extension.
 - Join only sanitized relative components beneath a destination root chosen after preview.
 - Open and retain the canonical destination-root handle, then traverse and create every component
   relative to trusted directory handles with no-follow/reparse-point rejection. A pre-create path
@@ -78,6 +80,8 @@ QuiverDL applies stricter platform-aware containment:
 - Conservatively reject case-folded or Unicode-normalized path collisions on every platform before
   starting any file. Do not infer destination filesystem semantics from the operating-system name;
   Linux destinations can also be case-insensitive or normalization-aware.
+- When a component already exists, compare stable filesystem identity obtained from the no-follow
+  handle so short-name or filesystem-specific aliases cannot make two batch paths share a target.
 - Reserve the destination, partial, state, temporary, and segment paths for the full batch. Use the
   existing no-replace promotion and preserve recoverable partials after ordinary interruption.
 - Do not implement Metalink-declared symbolic links, hard links, permissions, or executable bits.
@@ -105,6 +109,8 @@ QuiverDL applies stricter platform-aware containment:
   addresses without a second explicit confirmation. Mixed public/private DNS answers fail closed.
   Resolution and the actual socket destination must remain bound to the approved address class so a
   DNS change cannot bypass the decision.
+- Every redirect remains restricted to HTTP(S), and an HTTPS-to-HTTP downgrade requires explicit
+  insecure-transport confirmation before the HTTP connection is made.
 - Never copy request credentials or private headers between mirror origins. Stored proxy
   credentials remain inside the existing backend boundary and are not exposed to Metalink data.
 - Prevent mirror and metadata loops. Bound attempted mirrors and do not retry a failed mirror
@@ -135,7 +141,8 @@ rebinding.
 - Bounded parser tests cover malformed XML, entity expansion attempts, per-file and aggregate
   numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
-  Unicode/case collisions, adversarial symlink/reparse-point swaps during creation, and destination
+  trailing-dot/space aliases, alternate data streams, Unicode/case collisions, existing short-name
+  or filesystem aliases, adversarial symlink/reparse-point swaps during creation, and destination
   no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
