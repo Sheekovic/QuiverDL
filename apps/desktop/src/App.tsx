@@ -375,6 +375,7 @@ function App() {
     }
     const timer = window.setTimeout(() => {
       void invoke<boolean>("has_proxy_credentials", {
+        endpoint: proxyDraft.proxyUrl,
         username: proxyDraft.proxyUsername,
       })
         .then((present) => {
@@ -391,7 +392,7 @@ function App() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [proxyDraft.proxyMode, proxyDraft.proxyUsername]);
+  }, [proxyDraft.proxyMode, proxyDraft.proxyUrl, proxyDraft.proxyUsername]);
 
   const counts = useMemo(
     () => ({
@@ -643,6 +644,7 @@ function App() {
     setError("");
     try {
       await invoke("save_proxy_credentials", {
+        endpoint: proxyDraft.proxyUrl,
         username: proxyDraft.proxyUsername,
         password: proxyPassword,
       });
@@ -790,9 +792,11 @@ function App() {
                     value={proxyDraft.proxyUrl}
                     placeholder="http://proxy.example:8080"
                     autoComplete="off"
-                    onChange={(event) =>
-                      setProxyDraft((current) => ({ ...current, proxyUrl: event.target.value }))
-                    }
+                    onChange={(event) => {
+                      setProxyPassword("");
+                      setProxyCredentialsPresent(false);
+                      setProxyDraft((current) => ({ ...current, proxyUrl: event.target.value }));
+                    }}
                   />
                 </label>
                 <label>

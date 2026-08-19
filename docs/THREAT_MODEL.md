@@ -22,7 +22,8 @@ Custom proxy passwords are stored under a fixed QuiverDL service entry in Window
 Manager, macOS Keychain, or Linux Secret Service. Passwords are never serialized into `state.json`,
 recovery sidecars, logs, errors, or URLs, and the backend does not return a stored password to the
 webview. Usernames and proxy endpoints are not secrets and remain in application settings. The UI
-must explicitly replace or remove the stored credential.
+must explicitly replace or remove the stored credential. Each credential is bound to the normalized
+proxy endpoint and username so it cannot be forwarded to a different proxy after an edit.
 
 An HTTP proxy can observe and modify plain HTTP traffic. For HTTPS destinations, a proxy observes
 connection metadata and can deny or disrupt connections, but destination TLS still protects content

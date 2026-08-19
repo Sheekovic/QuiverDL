@@ -222,6 +222,7 @@ async fn proxy_policy(settings: &AppSettings) -> Result<ProxyPolicy, String> {
         "custom" => {
             let endpoint = Url::parse(settings.proxy_url.trim())
                 .map_err(|_| "The custom proxy URL is invalid".to_string())?;
+            let credential_endpoint = endpoint.to_string();
             let mut config = ProxyConfig::new(endpoint).map_err(|error| error.to_string())?;
             if !settings.proxy_bypass.trim().is_empty() {
                 config = config
@@ -229,12 +230,13 @@ async fn proxy_policy(settings: &AppSettings) -> Result<ProxyPolicy, String> {
                     .map_err(|error| error.to_string())?;
             }
             if !settings.proxy_username.is_empty() {
-                let password = load_proxy_password(settings.proxy_username.clone())
-                    .await?
-                    .ok_or_else(|| {
-                        "Save proxy credentials for the configured username before connecting"
-                            .to_string()
-                    })?;
+                let password =
+                    load_proxy_password(credential_endpoint, settings.proxy_username.clone())
+                        .await?
+                        .ok_or_else(|| {
+                            "Save proxy credentials for the configured username before connecting"
+                                .to_string()
+                        })?;
                 config = config
                     .with_basic_auth(settings.proxy_username.clone(), password)
                     .map_err(|error| error.to_string())?;

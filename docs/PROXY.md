@@ -38,7 +38,9 @@ the operating-system credential service:
 Only the username and endpoint are written to QuiverDL's `state.json`. The password is never added
 to the proxy URL or application state and is not returned to the webview after it has been saved.
 Changing the username requires saving its password again. **Remove** deletes the QuiverDL proxy
-entry from the credential service.
+entry from the credential service. Credentials are bound to both the normalized endpoint and
+username, so changing either value fails closed until a password is explicitly saved for the new
+combination.
 
 If the desktop credential service is locked or unavailable, authenticated custom routing fails
 closed with a generic error. QuiverDL does not fall back to plaintext storage or silently connect
