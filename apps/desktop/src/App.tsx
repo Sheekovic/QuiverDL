@@ -5,7 +5,7 @@ import "./App.css";
 
 type LinkInspection = {
   effectiveUrl: string;
-  totalBytes: number | null;
+  totalBytes: string | null;
   supportsRanges: boolean;
   hasValidator: boolean;
 };
@@ -15,12 +15,12 @@ type DownloadStatus = EngineStatus | "starting" | "paused" | "cancelled" | "fail
 
 type DownloadProgress = {
   status: EngineStatus;
-  downloadedBytes: number;
-  totalBytes: number | null;
+  downloadedBytes: string;
+  totalBytes: string | null;
 };
 
 type DownloadSummary = {
-  bytesWritten: number;
+  bytesWritten: string;
   sha256: string;
   resumed: boolean;
 };
@@ -31,8 +31,8 @@ type DownloadItem = {
   url: string;
   destination: string;
   status: DownloadStatus;
-  downloadedBytes: number;
-  totalBytes: number | null;
+  downloadedBytes: bigint;
+  totalBytes: bigint | null;
   sha256?: string;
   resumed?: boolean;
   error?: string;
@@ -65,16 +65,21 @@ const FILTER_LABELS: Record<Exclude<Filter, "all">, string> = {
   failed: "Needs attention",
 };
 
-function formatBytes(bytes: number | null) {
+function formatBytes(bytes: bigint | null) {
   if (bytes === null) return "Unknown";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
+  let divisor = 1n;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
+  while (bytes >= divisor * 1024n && unit < units.length - 1) {
+    divisor *= 1024n;
     unit += 1;
   }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  if (unit === 0) return `${bytes} ${units[unit]}`;
+
+  const tenths = (bytes * 10n + divisor / 2n) / divisor;
+  const whole = tenths / 10n;
+  const fraction = tenths % 10n;
+  return `${whole}${fraction === 0n ? "" : `.${fraction}`} ${units[unit]}`;
 }
 
 function filenameFromUrl(value: string) {
@@ -192,7 +197,7 @@ function App() {
       url: sourceUrl,
       destination,
       status: "starting",
-      downloadedBytes: 0,
+      downloadedBytes: 0n,
       totalBytes: null,
     };
     setDownloads((current) => [item, ...current]);
@@ -205,8 +210,8 @@ function App() {
           current.status === "paused" || current.status === "cancelled"
             ? current.status
             : message.status,
-        downloadedBytes: message.downloadedBytes,
-        totalBytes: message.totalBytes,
+        downloadedBytes: BigInt(message.downloadedBytes),
+        totalBytes: message.totalBytes === null ? null : BigInt(message.totalBytes),
       }));
     };
 
@@ -219,8 +224,8 @@ function App() {
       });
       updateDownload(id, {
         status: "completed",
-        downloadedBytes: summary.bytesWritten,
-        totalBytes: summary.bytesWritten,
+        downloadedBytes: BigInt(summary.bytesWritten),
+        totalBytes: BigInt(summary.bytesWritten),
         sha256: summary.sha256,
         resumed: summary.resumed,
       });
@@ -311,7 +316,7 @@ function App() {
           {inspection && (
             <div className="inspection-card">
               <div className="inspection-grid">
-                <div><span>File size</span><strong>{formatBytes(inspection.totalBytes)}</strong></div>
+                <div><span>File size</span><strong>{formatBytes(inspection.totalBytes === null ? null : BigInt(inspection.totalBytes))}</strong></div>
                 <div><span>Resume support</span><strong>{inspection.supportsRanges ? "Available" : "Unavailable"}</strong></div>
                 <div><span>Change validator</span><strong>{inspection.hasValidator ? "Protected" : "Not provided"}</strong></div>
               </div>
@@ -366,8 +371,8 @@ function FilterButton({ active, count, label, onClick }: { active: boolean; coun
 }
 
 function DownloadRow({ item, onControl, onRemove }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void }) {
-  const percentage = item.totalBytes && item.totalBytes > 0
-    ? Math.min(100, (item.downloadedBytes / item.totalBytes) * 100)
+  const percentage = item.totalBytes !== null && item.totalBytes > 0n
+    ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
   const isActive = ACTIVE_STATUSES.has(item.status);
   const canPause = ["probing", "downloading"].includes(item.status);

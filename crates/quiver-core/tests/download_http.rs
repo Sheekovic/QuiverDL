@@ -21,7 +21,7 @@ async fn downloads_verifies_and_promotes_a_file() {
     let expected_hash: [u8; 32] = Sha256::digest(FIXTURE).into();
     let mut request = DownloadRequest::new(url, &destination);
     request.expected_sha256 = Some(expected_hash);
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressEvent>();
+    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressEvent>(32);
 
     let result = DownloadEngine::new()
         .expect("engine should initialize")
@@ -63,7 +63,7 @@ async fn resumes_only_from_the_requested_content_range() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
     write_resume_files(directory.path(), &url).await;
-    let (progress_tx, _progress_rx) = mpsc::unbounded_channel::<ProgressEvent>();
+    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
 
     let result = DownloadEngine::new()
         .expect("engine should initialize")
@@ -93,7 +93,7 @@ async fn rejects_a_mismatched_resume_range_without_appending() {
     let destination = directory.path().join("fixture.bin");
     let partial = directory.path().join("fixture.bin.quiver-part");
     write_resume_files(directory.path(), &url).await;
-    let (progress_tx, _progress_rx) = mpsc::unbounded_channel::<ProgressEvent>();
+    let (progress_tx, _progress_rx) = mpsc::channel::<ProgressEvent>(32);
 
     let error = DownloadEngine::new()
         .expect("engine should initialize")

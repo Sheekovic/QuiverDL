@@ -1,4 +1,9 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use quiver_core::{
     DownloadControl, DownloadEngine, DownloadRequest, DownloadStatus, ProgressEvent,
@@ -16,14 +21,19 @@ struct TransferRegistry {
 #[derive(Clone)]
 struct ActiveTransfer {
     control: DownloadControl,
-    destination: PathBuf,
+    destination_key: String,
+}
+
+struct PreparedDestination {
+    path: PathBuf,
+    lock_key: String,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LinkInspection {
     effective_url: String,
-    total_bytes: Option<u64>,
+    total_bytes: Option<String>,
     supports_ranges: bool,
     has_validator: bool,
 }
@@ -32,16 +42,16 @@ struct LinkInspection {
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress {
     status: DownloadStatus,
-    downloaded_bytes: u64,
-    total_bytes: Option<u64>,
+    downloaded_bytes: String,
+    total_bytes: Option<String>,
 }
 
 impl From<ProgressEvent> for DownloadProgress {
     fn from(event: ProgressEvent) -> Self {
         Self {
             status: event.status,
-            downloaded_bytes: event.downloaded_bytes,
-            total_bytes: event.total_bytes,
+            downloaded_bytes: event.downloaded_bytes.to_string(),
+            total_bytes: event.total_bytes.map(|bytes| bytes.to_string()),
         }
     }
 }
@@ -49,7 +59,7 @@ impl From<ProgressEvent> for DownloadProgress {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadSummary {
-    bytes_written: u64,
+    bytes_written: String,
     sha256: String,
     resumed: bool,
 }
@@ -65,7 +75,7 @@ async fn inspect_url(url: String) -> Result<LinkInspection, String> {
 
     Ok(LinkInspection {
         effective_url: probe.effective_url.to_string(),
-        total_bytes: probe.total_bytes,
+        total_bytes: probe.total_bytes.map(|bytes| bytes.to_string()),
         supports_ranges: probe.supports_ranges,
         has_validator: probe.etag.is_some() || probe.last_modified.is_some(),
     })
@@ -81,9 +91,9 @@ async fn start_download(
 ) -> Result<DownloadSummary, String> {
     let task_id = validate_task_id(&task_id)?;
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
-    let destination = validate_destination(&destination)?;
+    let destination = prepare_destination(&destination).await?;
     let engine = DownloadEngine::new().map_err(|error| error.to_string())?;
-    let request = DownloadRequest::new(url, destination);
+    let request = DownloadRequest::new(url, &destination.path);
     let control = DownloadControl::new();
 
     {
@@ -96,7 +106,7 @@ async fn start_download(
         }
         if transfers
             .values()
-            .any(|transfer| transfer.destination == request.destination)
+            .any(|transfer| transfer.destination_key == destination.lock_key)
         {
             return Err("Another active download is already using this destination".into());
         }
@@ -104,17 +114,28 @@ async fn start_download(
             task_id.clone(),
             ActiveTransfer {
                 control: control.clone(),
-                destination: request.destination.clone(),
+                destination_key: destination.lock_key,
             },
         );
     }
 
-    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<ProgressEvent>();
+    let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
+        let mut last_download_progress = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap_or_else(Instant::now);
         while let Some(event) = progress_rx.recv().await {
+            if event.status == DownloadStatus::Downloading
+                && last_download_progress.elapsed() < Duration::from_millis(100)
+            {
+                continue;
+            }
             if on_event.send(event.into()).is_err() {
+                forwarding_control.cancel();
                 break;
             }
+            last_download_progress = Instant::now();
         }
     });
 
@@ -126,7 +147,7 @@ async fn start_download(
 
     let result = result.map_err(|error| error.to_string())?;
     Ok(DownloadSummary {
-        bytes_written: result.bytes_written,
+        bytes_written: result.bytes_written.to_string(),
         sha256: result
             .sha256
             .iter()
@@ -182,7 +203,64 @@ fn validate_destination(destination: &str) -> Result<PathBuf, String> {
     if !destination.is_absolute() || destination.file_name().is_none() {
         return Err("The download destination must be an absolute file path".into());
     }
-    Ok(destination)
+    Ok(normalize_path(&destination))
+}
+
+async fn prepare_destination(destination: &str) -> Result<PreparedDestination, String> {
+    let destination = validate_destination(destination)?;
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| "The download destination must include a file name".to_string())?
+        .to_owned();
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "The download destination must include a parent directory".to_string())?;
+
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| format!("Could not create the destination directory: {error}"))?;
+    let canonical_parent = tokio::fs::canonicalize(parent)
+        .await
+        .map_err(|error| format!("Could not resolve the destination directory: {error}"))?;
+    let path = canonical_parent.join(file_name);
+    let path = if tokio::fs::try_exists(&path)
+        .await
+        .map_err(|error| format!("Could not inspect the destination: {error}"))?
+    {
+        tokio::fs::canonicalize(path)
+            .await
+            .map_err(|error| format!("Could not resolve the destination: {error}"))?
+    } else {
+        path
+    };
+
+    Ok(PreparedDestination {
+        lock_key: destination_lock_key(&path),
+        path,
+    })
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn destination_lock_key(path: &Path) -> String {
+    let key = path.to_string_lossy().into_owned();
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        key.to_lowercase()
+    } else {
+        key
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -202,7 +280,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_destination, validate_task_id};
+    use quiver_core::DownloadStatus;
+
+    use super::{DownloadProgress, prepare_destination, validate_destination, validate_task_id};
 
     #[test]
     fn validates_download_identifiers() {
@@ -220,5 +300,42 @@ mod tests {
         };
         assert!(validate_destination(absolute).is_ok());
         assert!(validate_destination("archive.zip").is_err());
+    }
+
+    #[tokio::test]
+    async fn equivalent_destinations_share_a_lock_key() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let nested = directory.path().join("nested");
+        tokio::fs::create_dir_all(&nested)
+            .await
+            .expect("nested directory");
+        let direct = directory.path().join("archive.zip");
+        let redundant = nested.join("..").join("archive.zip");
+
+        let direct = prepare_destination(direct.to_str().expect("UTF-8 path"))
+            .await
+            .expect("direct destination");
+        let redundant = prepare_destination(redundant.to_str().expect("UTF-8 path"))
+            .await
+            .expect("redundant destination");
+        assert_eq!(direct.lock_key, redundant.lock_key);
+    }
+
+    #[test]
+    fn serializes_byte_counts_losslessly_as_strings() {
+        let progress = DownloadProgress {
+            status: DownloadStatus::Downloading,
+            downloaded_bytes: u64::MAX.to_string(),
+            total_bytes: Some(u64::MAX.to_string()),
+        };
+        let value = serde_json::to_value(progress).expect("progress should serialize");
+        assert_eq!(
+            value["downloadedBytes"],
+            serde_json::Value::String(u64::MAX.to_string())
+        );
+        assert_eq!(
+            value["totalBytes"],
+            serde_json::Value::String(u64::MAX.to_string())
+        );
     }
 }

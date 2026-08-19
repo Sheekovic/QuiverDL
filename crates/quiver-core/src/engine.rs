@@ -96,11 +96,11 @@ impl DownloadEngine {
         &self,
         request: DownloadRequest,
         control: DownloadControl,
-        progress: mpsc::UnboundedSender<ProgressEvent>,
+        progress: mpsc::Sender<ProgressEvent>,
     ) -> Result<DownloadResult> {
         validate_url(&request.url)?;
         ensure_destination(&request.destination, request.overwrite_existing).await?;
-        emit(&progress, &request, DownloadStatus::Probing, 0, None);
+        emit(&progress, &request, DownloadStatus::Probing, 0, None).await;
 
         let probe = self.probe(&request.url).await?;
         let partial_path = sibling_with_suffix(&request.destination, ".quiver-part");
@@ -162,7 +162,8 @@ impl DownloadEngine {
             DownloadStatus::Downloading,
             downloaded,
             probe.total_bytes,
-        );
+        )
+        .await;
 
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -178,7 +179,8 @@ impl DownloadEngine {
                 DownloadStatus::Downloading,
                 downloaded,
                 probe.total_bytes,
-            );
+            )
+            .await;
         }
         file.flush().await?;
         file.sync_all().await?;
@@ -198,7 +200,8 @@ impl DownloadEngine {
             DownloadStatus::Verifying,
             downloaded,
             probe.total_bytes,
-        );
+        )
+        .await;
         let sha256 = hash_file(&partial_path).await?;
         if request
             .expected_sha256
@@ -220,7 +223,8 @@ impl DownloadEngine {
             DownloadStatus::Completed,
             downloaded,
             probe.total_bytes,
-        );
+        )
+        .await;
 
         Ok(DownloadResult {
             bytes_written: downloaded,
@@ -281,19 +285,21 @@ fn can_resume(
     }
 }
 
-fn emit(
-    sender: &mpsc::UnboundedSender<ProgressEvent>,
+async fn emit(
+    sender: &mpsc::Sender<ProgressEvent>,
     request: &DownloadRequest,
     status: DownloadStatus,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
 ) {
-    let _ = sender.send(ProgressEvent {
-        id: request.id,
-        status,
-        downloaded_bytes,
-        total_bytes,
-    });
+    let _ = sender
+        .send(ProgressEvent {
+            id: request.id,
+            status,
+            downloaded_bytes,
+            total_bytes,
+        })
+        .await;
 }
 
 fn header_u64(value: Option<&reqwest::header::HeaderValue>) -> Option<u64> {
