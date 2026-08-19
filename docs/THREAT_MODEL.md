@@ -12,6 +12,25 @@ Servers, redirects, headers, lengths, range responses, and filenames are untrust
 
 TLS protects HTTPS transport but does not make a server trustworthy. SHA-256 verifies content only when the user or publisher supplies an expected digest through a trusted channel.
 
+### Proxy routing and credentials
+
+Direct routing is the default. System proxy mode delegates discovery and credential handling to the
+operating system and HTTP client. Custom mode accepts only an HTTP(S) endpoint without embedded
+credentials, paths, queries, or fragments. A bounded bypass list is applied by the HTTP client.
+
+Custom proxy passwords are stored under a fixed QuiverDL service entry in Windows Credential
+Manager, macOS Keychain, or Linux Secret Service. Passwords are never serialized into `state.json`,
+recovery sidecars, logs, errors, or URLs, and the backend does not return a stored password to the
+webview. Usernames and proxy endpoints are not secrets and remain in application settings. The UI
+must explicitly replace or remove the stored credential. Each credential is bound to the normalized
+proxy endpoint and username so it cannot be forwarded to a different proxy after an edit.
+
+An HTTP proxy can observe and modify plain HTTP traffic. For HTTPS destinations, a proxy observes
+connection metadata and can deny or disrupt connections, but destination TLS still protects content
+unless the operating system trusts a proxy-controlled interception certificate. Proxy compromise,
+malicious local root certificates, PAC scripts, SOCKS routing, and credential-store compromise are
+outside the current proxy feature's guarantees.
+
 ### Local filesystem and other processes
 
 Destinations must be absolute, parents are canonicalized, recovery sidecars are reserved against concurrent transfers, and completed files use no-replace atomic promotion. A local process running as the same user can still modify application files, partials, settings, or the destination; defending against a fully compromised user account is out of scope. Queue and bridge state use bounded JSON and atomic replacement. Release signing helps detect distribution tampering but does not protect a compromised running account.
@@ -42,4 +61,5 @@ Retries, redirects, segments, per-host connections, queue length, message size, 
 - Anonymity from servers, networks, DNS providers, or the user’s ISP
 - Guaranteed recovery when a server changes content without supplying validators
 
-Security assumptions and mitigations must be revisited before adding credential forwarding, proxy scripting, remote control APIs, automatic updates, or plugin execution.
+Security assumptions and mitigations must be revisited before adding origin credential forwarding,
+proxy scripting, remote control APIs, automatic updates, or plugin execution.

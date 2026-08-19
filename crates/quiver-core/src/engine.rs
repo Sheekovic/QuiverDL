@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::{
     BandwidthLimiter, DownloadControl, DownloadRequest, DownloadStatus, Error,
-    HostConnectionPolicy, ProgressEvent, Result,
+    HostConnectionPolicy, ProgressEvent, ProxyPolicy, Result,
     state::{self, PartialState, sibling_with_suffix},
 };
 
@@ -59,12 +59,21 @@ pub struct DownloadEngine {
 
 impl DownloadEngine {
     pub fn new() -> Result<Self> {
-        let client = Client::builder()
+        Self::new_with_proxy(ProxyPolicy::Disabled)
+    }
+
+    pub fn new_with_proxy(proxy_policy: ProxyPolicy) -> Result<Self> {
+        let mut builder = Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(24 * 60 * 60))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+            .redirect(reqwest::redirect::Policy::none());
+        builder = match proxy_policy {
+            ProxyPolicy::Disabled => builder.no_proxy(),
+            ProxyPolicy::System => builder,
+            ProxyPolicy::Custom(config) => builder.no_proxy().proxy(config.to_reqwest()?),
+        };
+        let client = builder.build()?;
         Ok(Self {
             client,
             global_limiter: None,

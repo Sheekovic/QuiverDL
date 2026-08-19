@@ -8,7 +8,7 @@ use std::{
 
 use quiver_core::{
     BandwidthLimiter, DownloadControl, DownloadEngine, DownloadRequest, DownloadStatus,
-    HostConnectionPolicy, ProgressEvent, RetryPolicy, TransferPolicy,
+    HostConnectionPolicy, ProgressEvent, ProxyConfig, ProxyPolicy, RetryPolicy, TransferPolicy,
 };
 use serde::Serialize;
 use tauri::{
@@ -22,9 +22,13 @@ use url::Url;
 
 mod browser_bridge;
 mod persistence;
+mod proxy_credentials;
 
 use browser_bridge::{acknowledge_browser_request, get_browser_bridge_info, list_browser_requests};
 use persistence::{AppSettings, PersistentStore, load_app_state, save_app_state};
+use proxy_credentials::{
+    clear_proxy_credentials, has_proxy_credentials, load_proxy_password, save_proxy_credentials,
+};
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
@@ -95,9 +99,11 @@ struct DownloadSummary {
 }
 
 #[tauri::command]
-async fn inspect_url(url: String) -> Result<LinkInspection, String> {
+async fn inspect_url(url: String, settings: Option<AppSettings>) -> Result<LinkInspection, String> {
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
-    let probe = DownloadEngine::new()
+    let settings = settings.unwrap_or_default();
+    settings.validate()?;
+    let probe = DownloadEngine::new_with_proxy(proxy_policy(&settings).await?)
         .map_err(|error| error.to_string())?
         .probe(&url)
         .await
@@ -126,7 +132,7 @@ async fn start_download(
     let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
     settings.validate()?;
-    let engine = DownloadEngine::new()
+    let engine = DownloadEngine::new_with_proxy(proxy_policy(&settings).await?)
         .map_err(|error| error.to_string())?
         .with_global_limiter(Some(registry.global_limiter.clone()))
         .with_host_policy(registry.host_policy.clone());
@@ -207,6 +213,43 @@ async fn start_download(
             .collect(),
         resumed: result.resumed,
     })
+}
+
+async fn proxy_policy(settings: &AppSettings) -> Result<ProxyPolicy, String> {
+    match settings.proxy_mode.as_str() {
+        "disabled" => Ok(ProxyPolicy::Disabled),
+        "system" => Ok(ProxyPolicy::System),
+        "custom" => {
+            let endpoint = Url::parse(settings.proxy_url.trim())
+                .map_err(|_| "The custom proxy URL is invalid".to_string())?;
+            let credential_endpoint = endpoint.to_string();
+            let mut config = ProxyConfig::new(endpoint).map_err(|error| error.to_string())?;
+            if !settings.proxy_bypass.trim().is_empty() {
+                config = config
+                    .with_bypass_list(settings.proxy_bypass.clone())
+                    .map_err(|error| error.to_string())?;
+            }
+            if !settings.proxy_username.is_empty() {
+                let password =
+                    load_proxy_password(credential_endpoint, settings.proxy_username.clone())
+                        .await?
+                        .ok_or_else(|| {
+                            "Save proxy credentials for the configured username before connecting"
+                                .to_string()
+                        })?;
+                config = config
+                    .with_basic_auth(settings.proxy_username.clone(), password)
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok(ProxyPolicy::Custom(config))
+        }
+        _ => Err("Unsupported proxy mode".into()),
+    }
+}
+
+#[tauri::command]
+fn validate_proxy_configuration(settings: AppSettings) -> Result<(), String> {
+    settings.validate()
 }
 
 #[tauri::command]
@@ -440,6 +483,10 @@ pub fn run() {
             get_browser_bridge_info,
             list_browser_requests,
             acknowledge_browser_request,
+            save_proxy_credentials,
+            clear_proxy_credentials,
+            has_proxy_credentials,
+            validate_proxy_configuration,
             quit_app
         ])
         .run(tauri::generate_context!())
@@ -451,8 +498,8 @@ mod tests {
     use quiver_core::DownloadStatus;
 
     use super::{
-        DownloadProgress, prepare_destination, sanitize_filename, validate_destination,
-        validate_task_id,
+        AppSettings, DownloadProgress, prepare_destination, proxy_policy, sanitize_filename,
+        validate_destination, validate_task_id,
     };
 
     #[test]
@@ -460,6 +507,20 @@ mod tests {
         assert_eq!(validate_task_id("download-42"), Ok("download-42".into()));
         assert!(validate_task_id("../download").is_err());
         assert!(validate_task_id("").is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_credentials_embedded_in_custom_proxy_urls() {
+        let settings = AppSettings {
+            proxy_mode: "custom".into(),
+            proxy_url: "http://user:secret@proxy.example:8080".into(),
+            ..AppSettings::default()
+        };
+        let error = proxy_policy(&settings)
+            .await
+            .expect_err("embedded credentials must be rejected");
+        assert!(error.contains("must not be embedded"));
+        assert!(!error.contains("secret"));
     }
 
     #[test]

@@ -68,7 +68,16 @@ type AppSettings = {
   maxConnectionsPerHost: number;
   perDownloadSpeedLimitBps: number | null;
   globalSpeedLimitBps: number | null;
+  proxyMode: "disabled" | "system" | "custom";
+  proxyUrl: string;
+  proxyUsername: string;
+  proxyBypass: string;
 };
+
+type ProxyDraft = Pick<
+  AppSettings,
+  "proxyMode" | "proxyUrl" | "proxyUsername" | "proxyBypass"
+>;
 
 type StoredDownload = Omit<DownloadItem, "downloadedBytes" | "totalBytes" | "recoverable"> & {
   downloadedBytes: string;
@@ -130,7 +139,20 @@ const DEFAULT_SETTINGS: AppSettings = {
   maxConnectionsPerHost: 8,
   perDownloadSpeedLimitBps: null,
   globalSpeedLimitBps: null,
+  proxyMode: "disabled",
+  proxyUrl: "",
+  proxyUsername: "",
+  proxyBypass: "",
 };
+
+function proxyDraftFromSettings(settings: AppSettings): ProxyDraft {
+  return {
+    proxyMode: settings.proxyMode,
+    proxyUrl: settings.proxyUrl,
+    proxyUsername: settings.proxyUsername,
+    proxyBypass: settings.proxyBypass,
+  };
+}
 
 const FILTER_LABELS: Record<Exclude<Filter, "all">, string> = {
   active: "Active downloads",
@@ -193,6 +215,12 @@ function App() {
   const [reviewingBrowserRequest, setReviewingBrowserRequest] =
     useState<BrowserRequest | null>(null);
   const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
+  const [proxyPassword, setProxyPassword] = useState("");
+  const [proxyDraft, setProxyDraft] = useState<ProxyDraft>(
+    proxyDraftFromSettings(DEFAULT_SETTINGS),
+  );
+  const [proxyCredentialsPresent, setProxyCredentialsPresent] = useState(false);
+  const [proxyCredentialBusy, setProxyCredentialBusy] = useState(false);
   const stateLoaded = useRef(false);
   const saveTimer = useRef<number | null>(null);
   const saveInFlight = useRef(false);
@@ -207,6 +235,7 @@ function App() {
       .then((snapshot) => {
         if (!active) return;
         setSettings(snapshot.settings);
+        setProxyDraft(proxyDraftFromSettings(snapshot.settings));
         setDownloads(
           snapshot.downloads.map((item) => ({
             ...item,
@@ -336,6 +365,35 @@ function App() {
     }).catch((cause) => setError(String(cause)));
   }, [settings.globalSpeedLimitBps]);
 
+  useEffect(() => {
+    let active = true;
+    if (proxyDraft.proxyMode !== "custom" || !proxyDraft.proxyUsername) {
+      setProxyCredentialsPresent(false);
+      return () => {
+        active = false;
+      };
+    }
+    const timer = window.setTimeout(() => {
+      void invoke<boolean>("has_proxy_credentials", {
+        endpoint: proxyDraft.proxyUrl,
+        username: proxyDraft.proxyUsername,
+      })
+        .then((present) => {
+          if (active) setProxyCredentialsPresent(present);
+        })
+        .catch((cause) => {
+          if (active) {
+            setProxyCredentialsPresent(false);
+            setError(String(cause));
+          }
+        });
+    }, 300);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [proxyDraft.proxyMode, proxyDraft.proxyUrl, proxyDraft.proxyUsername]);
+
   const counts = useMemo(
     () => ({
       active: downloads.filter((item) => ACTIVE_STATUSES.has(item.status)).length,
@@ -408,6 +466,7 @@ function App() {
     try {
       const result = await invoke<LinkInspectionResponse>("inspect_url", {
         url: submittedUrl,
+        settings,
       });
       setInspection({ ...result, sourceUrl: submittedUrl });
     } catch (cause) {
@@ -580,6 +639,52 @@ function App() {
     }
   }
 
+  async function storeProxyCredentials() {
+    setProxyCredentialBusy(true);
+    setError("");
+    try {
+      await invoke("save_proxy_credentials", {
+        endpoint: proxyDraft.proxyUrl,
+        username: proxyDraft.proxyUsername,
+        password: proxyPassword,
+      });
+      setProxyPassword("");
+      setProxyCredentialsPresent(true);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setProxyCredentialBusy(false);
+    }
+  }
+
+  async function applyProxyConfiguration() {
+    setProxyCredentialBusy(true);
+    setError("");
+    const nextSettings: AppSettings = { ...settings, ...proxyDraft };
+    try {
+      await invoke("validate_proxy_configuration", { settings: nextSettings });
+      setSettings(nextSettings);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setProxyCredentialBusy(false);
+    }
+  }
+
+  async function removeProxyCredentials() {
+    setProxyCredentialBusy(true);
+    setError("");
+    try {
+      await invoke("clear_proxy_credentials");
+      setProxyPassword("");
+      setProxyCredentialsPresent(false);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setProxyCredentialBusy(false);
+    }
+  }
+
   async function controlDownload(item: DownloadItem, action: "pause" | "resume" | "cancel") {
     setError("");
     try {
@@ -659,6 +764,124 @@ function App() {
             <input type="checkbox" checked={settings.notifications} onChange={(event) => setSettings((current) => ({ ...current, notifications: event.target.checked }))} />
             {t("notifications")}
           </label>
+          <fieldset className="proxy-settings">
+            <legend>Proxy</legend>
+            <label>
+              Routing
+              <select
+                value={proxyDraft.proxyMode}
+                onChange={(event) => {
+                  setProxyPassword("");
+                  setProxyDraft((current) => ({
+                    ...current,
+                    proxyMode: event.target.value as AppSettings["proxyMode"],
+                  }));
+                }}
+              >
+                <option value="disabled">Direct connection</option>
+                <option value="system">System proxy</option>
+                <option value="custom">Custom proxy</option>
+              </select>
+            </label>
+            {proxyDraft.proxyMode === "custom" && (
+              <div className="proxy-fields">
+                <label>
+                  Proxy URL
+                  <input
+                    type="url"
+                    value={proxyDraft.proxyUrl}
+                    placeholder="http://proxy.example:8080"
+                    autoComplete="off"
+                    onChange={(event) => {
+                      setProxyPassword("");
+                      setProxyCredentialsPresent(false);
+                      setProxyDraft((current) => ({ ...current, proxyUrl: event.target.value }));
+                    }}
+                  />
+                </label>
+                <label>
+                  Bypass list
+                  <input
+                    type="text"
+                    value={proxyDraft.proxyBypass}
+                    placeholder="localhost, .internal.example"
+                    autoComplete="off"
+                    onChange={(event) =>
+                      setProxyDraft((current) => ({ ...current, proxyBypass: event.target.value }))
+                    }
+                  />
+                </label>
+                <label>
+                  Username (optional)
+                  <input
+                    type="text"
+                    value={proxyDraft.proxyUsername}
+                    autoComplete="username"
+                    onChange={(event) => {
+                      setProxyPassword("");
+                      setProxyCredentialsPresent(false);
+                      setProxyDraft((current) => ({
+                        ...current,
+                        proxyUsername: event.target.value,
+                      }));
+                    }}
+                  />
+                </label>
+                {proxyDraft.proxyUsername && (
+                  <>
+                    <label>
+                      Password
+                      <input
+                        type="password"
+                        value={proxyPassword}
+                        autoComplete="current-password"
+                        placeholder={proxyCredentialsPresent ? "Stored securely" : "Required"}
+                        onChange={(event) => setProxyPassword(event.target.value)}
+                      />
+                    </label>
+                    <div className="proxy-credential-actions">
+                      <button
+                        type="button"
+                        disabled={proxyCredentialBusy || !proxyPassword}
+                        onClick={() => void storeProxyCredentials()}
+                      >
+                        Save password securely
+                      </button>
+                      {proxyCredentialsPresent && (
+                        <button
+                          type="button"
+                          disabled={proxyCredentialBusy}
+                          onClick={() => void removeProxyCredentials()}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <small className="credential-status" role="status">
+                      {proxyCredentialsPresent
+                        ? "Password stored in your operating-system credential store."
+                        : "Passwords are never saved in QuiverDL settings."}
+                    </small>
+                  </>
+                )}
+              </div>
+            )}
+            <button
+              className="apply-proxy"
+              type="button"
+              disabled={proxyCredentialBusy}
+              onClick={() => void applyProxyConfiguration()}
+            >
+              Apply proxy settings
+            </button>
+            <small className="credential-status">
+              Active: {settings.proxyMode === "disabled"
+                ? "direct connection"
+                : settings.proxyMode === "system"
+                  ? "system proxy"
+                  : settings.proxyUrl}
+            </small>
+          </fieldset>
           <button className="bridge-button" type="button" onClick={() => void revealBrowserBridge()}>
             Browser extension setup
           </button>
