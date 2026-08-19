@@ -47,6 +47,9 @@ and privacy boundaries.
 The [queue guide](docs/QUEUES.md) documents scheduling, ordering, restart recovery, and controls.
 The [secure updater design](docs/UPDATER.md) defines signature, manifest, downgrade, recovery, and
 key-rotation gates before direct-download updates can be enabled.
+The [distributed source evaluation](docs/DISTRIBUTED_SOURCES.md) records why bounded HTTP-only
+Metalink support may proceed later while BitTorrent remains behind separate isolation and consent
+gates.
 
 ## Get involved
 
