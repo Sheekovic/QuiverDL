@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      name="description"
+      content="QuiverDL is a fast, privacy-respecting open-source download manager built with Rust and Tauri."
+    >
+    <meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f7f8fc" media="(prefers-color-scheme: light)">
+    <meta property="og:title" content="QuiverDL — Your downloads, right on target">
+    <meta
+      property="og:description"
+      content="A fast, reliable, privacy-respecting open-source download manager."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://sheekovic.github.io/QuiverDL/">
+    <title>QuiverDL — Fast, private, open-source downloads</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell nav-shell">
+        <a class="brand" href="./" aria-label="QuiverDL home">
+          <span class="brand-mark" aria-hidden="true"><span></span></span>
+          <span>QuiverDL</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a href="#features">Features</a>
+          <a href="#community">Community</a>
+          <a href="https://github.com/Sheekovic/QuiverDL">GitHub</a>
+          <a href="./privacy/">Privacy</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero shell">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Open source · Pre-release</p>
+          <h1>Your downloads,<br><span>right on target.</span></h1>
+          <p class="hero-lede">
+            QuiverDL is a performance-first download manager with a native Rust engine,
+            reliable restart recovery, and privacy that does not depend on an account.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="https://github.com/Sheekovic/QuiverDL">
+              View on GitHub
+              <span aria-hidden="true">↗</span>
+            </a>
+            <a class="button secondary" href="https://github.com/Sheekovic/QuiverDL/blob/main/CONTRIBUTING.md">
+              Start contributing
+            </a>
+          </div>
+          <p class="release-note">
+            The first signed build is in preparation. Follow the repository to know when it lands.
+          </p>
+        </div>
+
+        <div class="download-card" role="img" aria-label="Illustration of a QuiverDL download">
+          <div class="window-bar">
+            <span></span><span></span><span></span>
+            <p>QuiverDL</p>
+          </div>
+          <div class="download-body">
+            <div class="file-icon" aria-hidden="true">↓</div>
+            <div class="file-copy">
+              <strong>open-source-release.iso</strong>
+              <span>3.4 GB of 4.0 GB</span>
+            </div>
+            <strong class="percent">85%</strong>
+          </div>
+          <div class="progress" aria-hidden="true"><span></span></div>
+          <div class="metrics">
+            <div><span>Speed</span><strong>42.8 MB/s</strong></div>
+            <div><span>Connections</span><strong>8 segments</strong></div>
+            <div><span>Privacy</span><strong>Local only</strong></div>
+          </div>
+          <div class="pulse pulse-one" aria-hidden="true"></div>
+          <div class="pulse pulse-two" aria-hidden="true"></div>
+        </div>
+      </section>
+
+      <section class="principles" aria-label="Project principles">
+        <div class="shell principle-grid">
+          <p><strong>Rust-powered</strong><span>Native transfer engine</span></p>
+          <p><strong>Cross-platform</strong><span>Windows, Linux, macOS</span></p>
+          <p><strong>Privacy-first</strong><span>No accounts or telemetry</span></p>
+          <p><strong>GPL-3.0+</strong><span>Free software, always</span></p>
+        </div>
+      </section>
+
+      <section class="section shell" id="features">
+        <div class="section-heading">
+          <p class="eyebrow">Built for the transfers that matter</p>
+          <h2>Fast is useful.<br>Reliable is essential.</h2>
+          <p>
+            QuiverDL treats every server response and filename as untrusted, then keeps your
+            progress recoverable when the network—or your computer—does not cooperate.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <article class="feature featured">
+            <div class="feature-symbol" aria-hidden="true">↯</div>
+            <h3>Adaptive parallel transfers</h3>
+            <p>
+              Bounded segments, per-host connection limits, adaptive sizing, and merge
+              verification work together for speed without sacrificing correctness.
+            </p>
+          </article>
+          <article class="feature">
+            <div class="feature-symbol" aria-hidden="true">↻</div>
+            <h3>Safe restart recovery</h3>
+            <p>
+              Resume decisions are validated against the remote file. Changed or malformed
+              responses never get silently appended to your partial download.
+            </p>
+          </article>
+          <article class="feature">
+            <div class="feature-symbol" aria-hidden="true">◇</div>
+            <h3>Private by design</h3>
+            <p>
+              No account, advertising, analytics, or telemetry. Your queue, settings, URLs, and
+              download history remain on your device.
+            </p>
+          </article>
+          <article class="feature">
+            <div class="feature-symbol" aria-hidden="true">⌁</div>
+            <h3>Browser companions</h3>
+            <p>
+              Optional Chromium and Firefox integrations use authenticated native messaging and
+              privacy-preserving interception rules that are disabled by default.
+            </p>
+          </article>
+          <article class="feature">
+            <div class="feature-symbol" aria-hidden="true">◐</div>
+            <h3>Desktop-native experience</h3>
+            <p>
+              Adaptive light and dark themes, keyboard-first controls, system tray behavior,
+              notifications, and English/Arabic direction support.
+            </p>
+          </article>
+          <article class="feature">
+            <div class="feature-symbol" aria-hidden="true">✓</div>
+            <h3>Integrity checks</h3>
+            <p>
+              Atomic destination handling, collision protection, exact range validation, and
+              optional SHA-256 verification keep completed files trustworthy.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="community-section" id="community">
+        <div class="shell community-grid">
+          <div>
+            <p class="eyebrow">Made in public</p>
+            <h2>Help aim the next release.</h2>
+            <p>
+              Code is only one way to contribute. Documentation, accessibility, translations,
+              deterministic tests, design feedback, and careful bug reports all make QuiverDL
+              better.
+            </p>
+          </div>
+          <div class="community-links">
+            <a href="https://github.com/Sheekovic/QuiverDL/labels/good%20first%20issue">
+              <span><strong>Good first issues</strong><small>Pick up a focused, guided task</small></span>
+              <b aria-hidden="true">→</b>
+            </a>
+            <a href="https://github.com/Sheekovic/QuiverDL/discussions">
+              <span><strong>Join the discussion</strong><small>Share ideas and ask questions</small></span>
+              <b aria-hidden="true">→</b>
+            </a>
+            <a href="https://github.com/Sheekovic/QuiverDL/blob/main/ROADMAP.md">
+              <span><strong>Read the roadmap</strong><small>See what is complete and what comes next</small></span>
+              <b aria-hidden="true">→</b>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing shell">
+        <div class="target" aria-hidden="true"><span></span></div>
+        <p class="eyebrow">Transparent from source to release</p>
+        <h2>A download manager you can inspect,<br>improve, and trust.</h2>
+        <a class="button primary" href="https://github.com/Sheekovic/QuiverDL">
+          Explore the source <span aria-hidden="true">↗</span>
+        </a>
+      </section>
+    </main>
+
+    <footer>
+      <div class="shell footer-grid">
+        <div>
+          <a class="brand" href="./">
+            <span class="brand-mark" aria-hidden="true"><span></span></span>
+            <span>QuiverDL</span>
+          </a>
+          <p>Your downloads, right on target.</p>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/Sheekovic/QuiverDL">Source</a>
+          <a href="https://github.com/Sheekovic/QuiverDL/blob/main/SECURITY.md">Security</a>
+          <a href="https://github.com/Sheekovic/QuiverDL/blob/main/SUPPORT.md">Support</a>
+          <a href="./privacy/">Privacy</a>
+        </div>
+        <p class="copyright">GPL-3.0-or-later · No tracking</p>
+      </div>
+    </footer>
+  </body>
+</html>
