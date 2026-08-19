@@ -6,6 +6,11 @@
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3%2B-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
+[Website](https://sheekovic.github.io/QuiverDL/) ·
+[Privacy Policy](https://sheekovic.github.io/QuiverDL/privacy/) ·
+[Roadmap](ROADMAP.md) ·
+[Contributing](CONTRIBUTING.md)
+
 QuiverDL is a performance-first, privacy-respecting open-source download manager. It combines a
 native Rust engine with a lightweight Tauri and React desktop application.
 
@@ -33,7 +38,9 @@ notification behavior, and never silently overwrites a destination.
 Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
 capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
 See the [roadmap](ROADMAP.md), [threat model](docs/THREAT_MODEL.md), and
-[release process](docs/RELEASE.md) for the remaining credential-gated release step.
+[release process](docs/RELEASE.md) for the remaining credential-gated release step. The
+[safe pause and resume guide](docs/RESUME.md) explains when interrupted bytes are reused, restarted,
+or preserved for another retry.
 
 ## Get involved
 

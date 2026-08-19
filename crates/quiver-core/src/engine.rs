@@ -1131,9 +1131,30 @@ mod tests {
 
     #[test]
     fn parses_content_range_total() {
-        assert_eq!(parse_content_range_total("bytes 0-0/4096"), Some(4096));
-        assert_eq!(parse_content_range_total("broken"), None);
-        assert_eq!(parse_content_range_total("bytes 0-0/*"), None);
+        let cases = [
+            ("bytes 0-0/4096", Some(4096)),
+            (" bytes 0-0/4096 ", Some(4096)),
+            ("bytes */4096", None),
+            ("bytes 0-0/*", None),
+            ("0-0/4096", None),
+            ("items 0-0/4096", None),
+            ("bytes 0/4096", None),
+            ("bytes 0-0", None),
+            ("bytes  0-0/4096", None),
+            ("bytes 1-0/4096", None),
+            ("bytes 0-4096/4096", None),
+            ("bytes 0-0/18446744073709551616", None),
+            ("bytes 18446744073709551616-0/4096", None),
+            ("broken", None),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(
+                parse_content_range_total(value),
+                expected,
+                "unexpected Content-Range result for {value:?}"
+            );
+        }
     }
 
     #[test]
