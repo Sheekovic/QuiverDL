@@ -26,6 +26,10 @@ Review this checklist for changes touching transfers, paths, persistence, browse
   HTTPS trackers/web seeds and outbound TCP peers.
 - New dependencies are justified, locked, maintained, and checked for advisories and license compatibility.
 - Release artifacts are produced only by the protected tag workflow, signed where required, checksummed, and manually inspected before a draft is published.
+- Updater manifests use the fixed HTTPS origin, immutable release assets, exact embedded signatures,
+  complete platform coverage, increasing SemVer, and no unsigned or network-downgrade fallback.
+- A rollback change preserves queue/download state, re-verifies the cached previous package, and
+  passes bounded failed-start, migration, power-loss, and disk-full recovery tests on every platform.
 
 Current verification commands:
 
@@ -36,6 +40,9 @@ cargo test --workspace
 npm run build --prefix apps/desktop
 node --check extensions/chromium/background.js
 node --check extensions/firefox/background.js
+node scripts/validate-updater-design.mjs
+node --test scripts/test-generate-update-manifest.mjs
+node --test scripts/test-prepare-updater-config.mjs
 ```
 
 Report unresolved security findings privately according to `SECURITY.md`; never paste real tokens or private URLs into issues or test fixtures.
