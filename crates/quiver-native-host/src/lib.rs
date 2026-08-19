@@ -194,7 +194,12 @@ fn sanitize_filename(value: &str) -> Option<String> {
 }
 
 fn write_inbox_request(inbox: &Path, request: &InboxRequest) -> io::Result<()> {
-    fs::create_dir_all(inbox)?;
+    match fs::create_dir(inbox) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    validate_private_directory(inbox)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -218,6 +223,26 @@ fn write_inbox_request(inbox: &Path, request: &InboxRequest) -> io::Result<()> {
     fs::rename(temporary, destination)?;
     #[cfg(unix)]
     fs::File::open(inbox)?.sync_all()?;
+    Ok(())
+}
+
+fn validate_private_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    #[cfg(windows)]
+    let is_reparse_point = {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    };
+    #[cfg(not(windows))]
+    let is_reparse_point = false;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "native inbox is not a real directory",
+        ));
+    }
     Ok(())
 }
 
@@ -315,5 +340,33 @@ mod tests {
             .expect("request should read");
         assert!(!queued.contains("correct-token"));
         assert!(queued.contains(".._safe.zip"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_write_through_a_linked_inbox_directory() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let inbox = directory.path().join("inbox");
+        std::fs::create_dir(&target).expect("target directory");
+        symlink(&target, &inbox).expect("inbox symlink");
+        let config = BridgeConfig {
+            token: "correct-token".into(),
+            inbox_dir: inbox,
+        };
+
+        let response = process_message(
+            &config,
+            br#"{"version":1,"action":"enqueue","token":"correct-token","url":"https://example.test/file"}"#,
+        );
+        assert!(!response.ok);
+        assert_eq!(
+            std::fs::read_dir(target)
+                .expect("target directory should read")
+                .count(),
+            0
+        );
     }
 }

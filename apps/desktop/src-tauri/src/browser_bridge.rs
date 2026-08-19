@@ -41,6 +41,15 @@ fn bridge_directory() -> Result<PathBuf, String> {
 
 async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     let directory = bridge_directory()?;
+    let parent = directory
+        .parent()
+        .ok_or_else(|| "The bridge configuration path is invalid".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| format!("Could not create the configuration parent: {error}"))?;
+    ensure_private_directory(&directory)
+        .await
+        .map_err(|error| format!("The bridge configuration directory is unsafe: {error}"))?;
     let path = directory.join("native-bridge.json");
     if let Ok(Some(bytes)) =
         super::persistence::read_bounded_regular_file(&path, MAX_BRIDGE_CONFIG_BYTES).await
@@ -60,16 +69,6 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
         return Ok((path, config));
     }
 
-    tokio::fs::create_dir_all(&directory)
-        .await
-        .map_err(|error| format!("Could not create the bridge directory: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
-            .await
-            .map_err(|error| format!("Could not protect the bridge directory: {error}"))?;
-    }
     let config = BridgeConfig {
         token: hex::encode(rand::random::<[u8; 32]>()),
         inbox_dir: directory.join("inbox"),
@@ -197,23 +196,27 @@ async fn quarantine_invalid_entry(
     path: &std::path::Path,
     rejected_directory: &std::path::Path,
 ) -> std::io::Result<()> {
-    match tokio::fs::create_dir(rejected_directory).await {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error),
-    }
-    validate_private_directory(rejected_directory).await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(rejected_directory, std::fs::Permissions::from_mode(0o700))
-            .await?;
-    }
+    ensure_private_directory(rejected_directory).await?;
     let destination = rejected_directory.join(format!(
         "{}.rejected",
         hex::encode(rand::random::<[u8; 16]>())
     ));
     tokio::fs::rename(path, destination).await
+}
+
+async fn ensure_private_directory(path: &std::path::Path) -> std::io::Result<()> {
+    match tokio::fs::create_dir(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    validate_private_directory(path).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).await?;
+    }
+    Ok(())
 }
 
 async fn validate_private_directory(path: &std::path::Path) -> std::io::Result<()> {
@@ -262,6 +265,11 @@ fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInbox
 pub(crate) async fn acknowledge_browser_request(id: String) -> Result<(), String> {
     let id = super::validate_task_id(&id)?;
     let (_, config) = ensure_config().await?;
+    match validate_private_directory(&config.inbox_dir).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("The browser inbox is unsafe: {error}")),
+    }
     let path = config.inbox_dir.join(format!("{id}.json"));
     if tokio::fs::try_exists(&path)
         .await
