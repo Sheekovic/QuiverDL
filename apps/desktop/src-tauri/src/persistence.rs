@@ -297,7 +297,14 @@ pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Resu
 
 #[cfg(not(windows))]
 pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
+    std::fs::rename(source, destination)?;
+    let parent = destination.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "queue destination has no parent directory",
+        )
+    })?;
+    std::fs::File::open(parent)?.sync_all()
 }
 
 #[cfg(test)]

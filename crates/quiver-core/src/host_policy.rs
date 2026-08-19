@@ -19,13 +19,24 @@ struct HostState {
 
 #[derive(Debug)]
 pub(crate) struct HostPermit {
+    origin: String,
     state: Arc<HostState>,
+    hosts: Arc<Mutex<HostStates>>,
 }
 
 impl Drop for HostPermit {
     fn drop(&mut self) {
-        self.state.active.fetch_sub(1, Ordering::Release);
+        let previous = self.state.active.fetch_sub(1, Ordering::AcqRel);
         self.state.changed.notify_one();
+        if previous == 1
+            && Arc::strong_count(&self.state) == 2
+            && let Ok(mut hosts) = self.hosts.try_lock()
+            && hosts
+                .get(&self.origin)
+                .is_some_and(|state| Arc::ptr_eq(state, &self.state))
+        {
+            hosts.remove(&self.origin);
+        }
     }
 }
 
@@ -47,7 +58,10 @@ impl HostConnectionPolicy {
         let cap = usize::from(max_connections.clamp(1, 32));
         let state = {
             let mut hosts = self.hosts.lock().await;
-            Arc::clone(hosts.entry(origin).or_default())
+            hosts.retain(|_, state| {
+                state.active.load(Ordering::Acquire) > 0 || Arc::strong_count(state) > 1
+            });
+            Arc::clone(hosts.entry(origin.clone()).or_default())
         };
 
         loop {
@@ -60,7 +74,11 @@ impl HostConnectionPolicy {
                     .is_ok()
                 {
                     drop(changed);
-                    return Some(HostPermit { state });
+                    return Some(HostPermit {
+                        origin,
+                        state,
+                        hosts: Arc::clone(&self.hosts),
+                    });
                 }
                 continue;
             }
@@ -95,5 +113,16 @@ mod tests {
                 .expect("released permit should wake")
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn evicts_inactive_origins() {
+        let policy = HostConnectionPolicy::default();
+        for index in 0..100 {
+            let url = Url::parse(&format!("https://host-{index}.example.test/file"))
+                .expect("fixture URL");
+            drop(policy.acquire(&url, 1).await.expect("permit"));
+        }
+        assert_eq!(policy.hosts.lock().await.len(), 0);
     }
 }

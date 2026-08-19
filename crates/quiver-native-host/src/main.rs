@@ -16,7 +16,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(Into::into)
         .or_else(default_config_path)
         .ok_or("could not locate the user configuration directory")?;
-    let config: BridgeConfig = serde_json::from_slice(&fs::read(config_path)?)?;
+    let config: BridgeConfig = serde_json::from_slice(&fs::read(&config_path)?)?;
+    config.validate(&config_path)?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     loop {

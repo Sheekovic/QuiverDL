@@ -17,6 +17,27 @@ pub struct BridgeConfig {
     pub inbox_dir: PathBuf,
 }
 
+impl BridgeConfig {
+    pub fn validate(&self, config_path: &Path) -> io::Result<()> {
+        let expected_inbox = config_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(|parent| parent.join("inbox"));
+        if !config_path.is_absolute()
+            || self.token.len() != 64
+            || !self.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !self.inbox_dir.is_absolute()
+            || expected_inbox.as_ref() != Some(&self.inbox_dir)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "native bridge configuration failed validation",
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserMessage {
@@ -172,14 +193,48 @@ fn write_inbox_request(inbox: &Path, request: &InboxRequest) -> io::Result<()> {
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(temporary, destination)
+    fs::rename(temporary, destination)?;
+    #[cfg(unix)]
+    fs::File::open(inbox)?.sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{io::Cursor, path::Path};
 
     use super::{BridgeConfig, HostResponse, process_message, read_message, write_message};
+
+    #[test]
+    fn validates_bridge_config_against_its_location() {
+        let root = if cfg!(windows) {
+            Path::new("C:/Users/test/AppData/Roaming/QuiverDL")
+        } else {
+            Path::new("/home/test/.config/QuiverDL")
+        };
+        let config_path = root.join("native-bridge.json");
+        let valid = BridgeConfig {
+            token: "a1".repeat(32),
+            inbox_dir: root.join("inbox"),
+        };
+        assert!(valid.validate(&config_path).is_ok());
+        assert!(
+            BridgeConfig {
+                token: String::new(),
+                inbox_dir: valid.inbox_dir.clone(),
+            }
+            .validate(&config_path)
+            .is_err()
+        );
+        assert!(
+            BridgeConfig {
+                token: valid.token,
+                inbox_dir: root.join("elsewhere"),
+            }
+            .validate(&config_path)
+            .is_err()
+        );
+    }
 
     #[test]
     fn native_framing_round_trips() {
