@@ -10,6 +10,12 @@ Create a protected GitHub environment named `release`. Add `WINDOWS_CERTIFICATE`
 
 The workflow deliberately fails instead of publishing unsigned Windows or unnotarized macOS release artifacts. Certificates and account credentials cannot be supplied by source code; the repository owner must obtain them from an appropriate certificate authority and Apple Developer account.
 
+Direct-download update signing is a separate trust root from operating-system code signing. Follow
+the [secure updater design](UPDATER.md): generate and back up the Tauri key offline, add the encrypted
+private key only to the protected release environment, compile the public key into direct builds,
+and publish `latest.json` only after every immutable artifact and signature passes release QA. Store
+builds use their marketplace update channel.
+
 ## Cutting a release
 
 1. Confirm CI is green and `ROADMAP.md`, `CHANGELOG.md`, Cargo, npm, and Tauri versions agree.

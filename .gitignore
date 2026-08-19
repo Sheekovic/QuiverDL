@@ -7,4 +7,5 @@
 .vscode/
 .DS_Store
 Thumbs.db
+apps/desktop/src-tauri/tauri.updater.conf.json
 

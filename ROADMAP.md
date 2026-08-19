@@ -52,7 +52,7 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 - [x] Scheduled and sequential queues
 - Metalink and BitTorrent evaluation behind separate threat models
 - Store packaging for browser extensions and operating-system app stores
-- Automated updater design with rollback and signature verification
+- [x] Automated updater design with rollback and signature verification
 
 ## Good first contributions
 

@@ -49,6 +49,13 @@ Manual context-menu capture is the default. Automatic interception is opt-in, co
 
 Pull requests run formatting, linting, tests on major desktop platforms, frontend builds, extension syntax checks, and dependency lockfiles. Tag releases require protected-environment signing secrets, Windows Authenticode signing, macOS Developer ID signing/notarization, and checksummed artifacts. Maintainer accounts, GitHub Actions dependencies, certificate authorities, and package registries remain supply-chain dependencies. Branch protection, least-privilege workflow permissions, review, Dependabot, and draft release inspection reduce that risk.
 
+The direct updater remains disabled until its separate key and recovery gates are satisfied. Its
+design requires a fixed HTTPS manifest endpoint, immutable release URLs, mandatory Tauri signatures
+plus platform signatures, strictly increasing versions, no unsigned fallback, and a locally cached
+previous package for rollback. A valid historical signature cannot authorize a network downgrade.
+Store builds use store-managed updates. See [the updater design](UPDATER.md) for the full trust,
+rollback, and key-rotation boundary.
+
 ## Availability and resource limits
 
 Retries, redirects, segments, per-host connections, queue length, message size, and settings are bounded. Speed limits are cooperative schedulers. A malicious server can remain slow, consume the configured partial-file disk space, or repeatedly return transient failures; users can cancel, and QuiverDL preserves resumable data when safe. Disk exhaustion and operating-system termination cannot be fully prevented.
@@ -62,4 +69,4 @@ Retries, redirects, segments, per-host connections, queue length, message size, 
 - Guaranteed recovery when a server changes content without supplying validators
 
 Security assumptions and mitigations must be revisited before adding origin credential forwarding,
-proxy scripting, remote control APIs, automatic updates, or plugin execution.
+proxy scripting, remote control APIs, enabling the designed automatic updater, or plugin execution.

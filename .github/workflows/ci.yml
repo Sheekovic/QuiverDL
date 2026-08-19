@@ -71,6 +71,8 @@ jobs:
           sh -n ../../extensions/native-host/install-linux.sh
           sh -n ../../extensions/native-host/install-macos.sh
           ../../extensions/native-host/test-installers.sh
+          node ../../scripts/validate-updater-design.mjs
+          node --test ../../scripts/test-generate-update-manifest.mjs
 
   desktop-check:
     name: Desktop Rust check
