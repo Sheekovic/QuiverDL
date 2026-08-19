@@ -28,9 +28,11 @@ serde_json = "1"
 quiver-core = { path = "../../../crates/quiver-core" }
 dirs.workspace = true
 hex.workspace = true
+keyring.workspace = true
 rand.workspace = true
 tokio.workspace = true
 url.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

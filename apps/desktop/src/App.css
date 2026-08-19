@@ -29,7 +29,7 @@
 body { margin: 0; min-width: 780px; min-height: 100vh; overflow: hidden; }
 button, input, select { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
   outline-offset: 2px;
 }
@@ -116,7 +116,7 @@ nav { display: grid; gap: 5px; }
 }
 .settings-panel summary { margin-bottom: 12px; cursor: pointer; font-weight: 700; }
 .settings-panel label { margin: 10px 0; }
-.settings-panel select, .settings-panel input[type="number"] {
+.settings-panel select, .settings-panel input:not([type="checkbox"]) {
   width: 100%;
   margin-top: 5px;
   padding: 7px 8px;
@@ -127,6 +127,37 @@ nav { display: grid; gap: 5px; }
 }
 .settings-panel .checkbox-setting { display: flex; align-items: center; gap: 7px; }
 .settings-panel input[type="checkbox"] { width: auto; }
+.proxy-settings {
+  margin: 13px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.proxy-settings legend { padding: 0 5px; color: var(--text); font-weight: 700; }
+.proxy-fields { display: grid; gap: 2px; }
+.proxy-credential-actions { display: flex; gap: 6px; }
+.proxy-credential-actions button {
+  flex: 1;
+  padding: 7px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.proxy-credential-actions button:disabled { opacity: 0.5; cursor: default; }
+.apply-proxy {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.apply-proxy:disabled { opacity: 0.5; cursor: default; }
+.credential-status { display: block; margin-top: 6px; color: var(--subtle); line-height: 1.4; }
 .bridge-button {
   width: 100%;
   padding: 8px;

@@ -6,6 +6,7 @@ mod engine;
 mod error;
 mod host_policy;
 mod model;
+mod proxy;
 mod state;
 
 pub use bandwidth::BandwidthLimiter;
@@ -16,3 +17,4 @@ pub use host_policy::HostConnectionPolicy;
 pub use model::{
     DownloadId, DownloadRequest, DownloadStatus, ProgressEvent, RetryPolicy, TransferPolicy,
 };
+pub use proxy::{ProxyConfig, ProxyPolicy};

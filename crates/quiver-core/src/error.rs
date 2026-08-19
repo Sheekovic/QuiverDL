@@ -18,6 +18,9 @@ pub enum Error {
     #[error("the server returned a temporary response: {0}")]
     TransientResponse(String),
 
+    #[error("invalid proxy configuration: {0}")]
+    InvalidProxyConfiguration(String),
+
     #[error("download was cancelled")]
     Cancelled,
 

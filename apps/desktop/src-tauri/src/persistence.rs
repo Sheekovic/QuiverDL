@@ -39,6 +39,10 @@ pub(crate) struct AppSettings {
     pub max_connections_per_host: u8,
     pub per_download_speed_limit_bps: Option<u64>,
     pub global_speed_limit_bps: Option<u64>,
+    pub proxy_mode: String,
+    pub proxy_url: String,
+    pub proxy_username: String,
+    pub proxy_bypass: String,
 }
 
 impl Default for AppSettings {
@@ -54,6 +58,10 @@ impl Default for AppSettings {
             max_connections_per_host: 8,
             per_download_speed_limit_bps: None,
             global_speed_limit_bps: None,
+            proxy_mode: "disabled".into(),
+            proxy_url: String::new(),
+            proxy_username: String::new(),
+            proxy_bypass: String::new(),
         }
     }
 }
@@ -79,6 +87,36 @@ impl AppSettings {
         }
         if !(1..=32).contains(&self.max_connections_per_host) {
             return Err("Per-server connection count must be between 1 and 32".into());
+        }
+        if !matches!(self.proxy_mode.as_str(), "disabled" | "system" | "custom") {
+            return Err("Unsupported proxy mode".into());
+        }
+        if self.proxy_url.chars().count() > 2_048
+            || self.proxy_url.chars().any(char::is_control)
+            || self.proxy_bypass.chars().count() > 8 * 1024
+            || self.proxy_bypass.chars().any(char::is_control)
+            || self.proxy_username.chars().count() > 512
+            || self.proxy_username.contains(':')
+            || self.proxy_username.chars().any(char::is_control)
+        {
+            return Err("The proxy settings are too long or contain unsupported characters".into());
+        }
+        if self.proxy_mode == "custom" && self.proxy_url.trim().is_empty() {
+            return Err("The custom proxy URL is required".into());
+        }
+        if !self.proxy_url.trim().is_empty() {
+            let endpoint =
+                Url::parse(self.proxy_url.trim()).map_err(|_| "The custom proxy URL is invalid")?;
+            let mut config =
+                quiver_core::ProxyConfig::new(endpoint).map_err(|error| error.to_string())?;
+            if !self.proxy_bypass.trim().is_empty() {
+                config = config
+                    .with_bypass_list(self.proxy_bypass.clone())
+                    .map_err(|error| error.to_string())?;
+            }
+            drop(config);
+        } else if !self.proxy_bypass.trim().is_empty() {
+            return Err("A proxy bypass list requires a custom proxy URL".into());
         }
         for limit in [
             self.per_download_speed_limit_bps,
@@ -419,7 +457,21 @@ mod tests {
         snapshot.validate().expect("default snapshot is valid");
         assert!(snapshot.settings.notifications);
         assert_eq!(snapshot.settings.theme, "system");
+        assert_eq!(snapshot.settings.proxy_mode, "disabled");
         assert_eq!(snapshot.downloads.len(), 0);
+    }
+
+    #[test]
+    fn older_snapshots_default_to_direct_proxy_routing() {
+        let mut snapshot: AppSnapshot =
+            serde_json::from_str(r#"{"schemaVersion":1,"settings":{},"downloads":[]}"#)
+                .expect("legacy snapshot should deserialize");
+        snapshot
+            .validate()
+            .expect("legacy snapshot should remain valid");
+        assert_eq!(snapshot.settings.proxy_mode, "disabled");
+        let saved = serde_json::to_string(&snapshot).expect("snapshot should serialize");
+        assert!(!saved.to_ascii_lowercase().contains("password"));
     }
 
     #[test]
@@ -429,6 +481,19 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_proxy_credentials_before_settings_can_be_saved() {
+        let settings = AppSettings {
+            proxy_url: "http://user:password@proxy.example:8080".into(),
+            ..AppSettings::default()
+        };
+        let error = settings
+            .validate()
+            .expect_err("embedded credentials must never reach state.json");
+        assert!(error.contains("must not be embedded"));
+        assert!(!error.contains("password"));
     }
 
     #[test]
