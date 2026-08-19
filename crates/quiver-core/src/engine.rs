@@ -655,6 +655,7 @@ async fn finish_download(
         .expected_sha256
         .is_some_and(|expected| expected != sha256)
     {
+        invalidate_failed_verification(partial_path, state_path).await?;
         return Err(Error::ChecksumMismatch);
     }
 
@@ -682,6 +683,17 @@ async fn finish_download(
         sha256,
         resumed,
     })
+}
+
+async fn invalidate_failed_verification(partial_path: &Path, state_path: &Path) -> Result<()> {
+    if tokio::fs::try_exists(state_path).await? {
+        tokio::fs::remove_file(state_path).await?;
+    }
+    remove_segment_files(partial_path).await?;
+    if tokio::fs::try_exists(partial_path).await? {
+        tokio::fs::remove_file(partial_path).await?;
+    }
+    Ok(())
 }
 
 fn validate_url(url: &Url) -> Result<()> {
@@ -1011,7 +1023,8 @@ mod tests {
 
     use super::{
         ByteRange, ContentRange, ProbeResult, can_resume, download_segment, emit, file_len,
-        parse_content_range, parse_content_range_total, plan_segments, status_error,
+        finish_download, parse_content_range, parse_content_range_total, plan_segments,
+        status_error,
     };
     use crate::{
         DownloadControl, DownloadRequest, DownloadStatus, Error, HostConnectionPolicy,
@@ -1056,6 +1069,63 @@ mod tests {
             tokio::fs::read(target).await.expect("target should read"),
             b"untrusted segment"
         );
+    }
+
+    #[tokio::test]
+    async fn interrupted_verification_retains_completed_segments() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("download.bin");
+        let partial = directory.path().join("download.bin.quiver-part");
+        let state = directory.path().join("download.bin.quiver.json");
+        tokio::fs::write(&partial, b"complete bytes")
+            .await
+            .expect("partial should write");
+        tokio::fs::write(&state, b"state")
+            .await
+            .expect("state should write");
+        for index in 0..3 {
+            tokio::fs::write(
+                directory
+                    .path()
+                    .join(format!("download.bin.quiver-part.segment-{index}")),
+                b"segment",
+            )
+            .await
+            .expect("segment should write");
+        }
+        let request = DownloadRequest::new(
+            Url::parse("https://example.test/file").expect("fixture URL"),
+            destination,
+        );
+        let control = DownloadControl::new();
+        control.cancel();
+        let (progress, _receiver) = mpsc::channel(2);
+
+        assert!(matches!(
+            finish_download(
+                &request,
+                &control,
+                &progress,
+                &partial,
+                &state,
+                14,
+                Some(14),
+                false,
+            )
+            .await,
+            Err(Error::Cancelled)
+        ));
+        for index in 0..3 {
+            assert!(
+                tokio::fs::try_exists(
+                    directory
+                        .path()
+                        .join(format!("download.bin.quiver-part.segment-{index}"))
+                )
+                .await
+                .expect("segment should be inspectable")
+            );
+        }
     }
 
     #[test]

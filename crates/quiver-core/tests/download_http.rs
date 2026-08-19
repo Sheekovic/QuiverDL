@@ -83,7 +83,7 @@ async fn downloads_and_merges_validated_parallel_segments() {
 }
 
 #[tokio::test]
-async fn retains_completed_segments_until_verification_succeeds() {
+async fn invalidates_completed_segments_after_checksum_mismatch() {
     let (url, server, _fixture) = segmented_fixture_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("parallel.bin");
@@ -109,11 +109,21 @@ async fn retains_completed_segments_until_verification_succeeds() {
             .path()
             .join(format!("parallel.bin.quiver-part.segment-{index}"));
         assert!(
-            tokio::fs::try_exists(segment)
+            !tokio::fs::try_exists(segment)
                 .await
                 .expect("segment path should be inspectable")
         );
     }
+    assert!(
+        !tokio::fs::try_exists(directory.path().join("parallel.bin.quiver-part"))
+            .await
+            .expect("partial path should be inspectable")
+    );
+    assert!(
+        !tokio::fs::try_exists(directory.path().join("parallel.bin.quiver.json"))
+            .await
+            .expect("state path should be inspectable")
+    );
     server
         .await
         .expect("segmented fixture server should finish");

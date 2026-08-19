@@ -119,8 +119,11 @@ impl StoredDownload {
         }
         super::validate_destination(&self.destination)?;
         if self.name.is_empty()
-            || self.name.len() > 255
-            || self.error.as_ref().is_some_and(|value| value.len() > 4_096)
+            || self.name.chars().count() > 255
+            || self
+                .error
+                .as_ref()
+                .is_some_and(|value| value.chars().count() > 4_096)
             || !matches!(
                 self.status.as_str(),
                 "starting"
@@ -408,7 +411,7 @@ pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, AppSnapshot, MAX_STATE_BYTES};
+    use super::{AppSettings, AppSnapshot, MAX_STATE_BYTES, StoredDownload};
 
     #[test]
     fn defaults_are_valid_and_private() {
@@ -426,6 +429,29 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_multibyte_names_within_the_character_limit() {
+        let destination = if cfg!(windows) {
+            "C:/Downloads/file.bin"
+        } else {
+            "/tmp/file.bin"
+        };
+        let download = StoredDownload {
+            id: "80cf859d-fac7-4ec2-a5e2-63a3242c9776".into(),
+            name: "測".repeat(100),
+            url: "https://example.test/file.bin".into(),
+            destination: destination.into(),
+            status: "paused".into(),
+            downloaded_bytes: "0".into(),
+            total_bytes: None,
+            sha256: None,
+            resumed: None,
+            error: None,
+        };
+
+        download.validate().expect("multibyte name should be valid");
     }
 
     #[tokio::test]
