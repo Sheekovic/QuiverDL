@@ -19,15 +19,17 @@ the restored queue setting.
 ## Restart and controls
 
 Queued and scheduled entries remain pending across a normal quit or an interrupted shutdown. On
-the next launch, the desktop validates the saved queue, restores due entries in enqueue order, and
-admits each one before submitting the next so asynchronous path preparation cannot reorder FIFO
-work. Future entries are ordered by scheduled time and then enqueue time. A scheduled time that
-passed while QuiverDL was closed becomes due immediately.
+the next launch, the desktop validates the saved queue and registers every pending entry with the
+Rust coordinator in persisted enqueue order before it accepts new work. Due tickets remain ordered
+even when path preparation finishes out of order. Future tickets do not block ready work; they join
+the ready set at their scheduled time, with their persisted ticket breaking ties. A scheduled time
+that passed while QuiverDL was closed becomes due immediately.
 
-Queued and scheduled entries can be cancelled before any request is sent. Destination and recovery
-sidecar paths are reserved while an entry waits, preventing two active queue items from writing the
-same files. Network-active downloads keep the existing pause, resume, cancel, retry, and
-validator-safe recovery behavior described in [RESUME.md](RESUME.md).
+Queued and scheduled entries can be cancelled before any request is sent. Cancellation requested
+while a ticket is being registered is retained and applied as soon as registration completes.
+Destination and recovery sidecar paths are reserved while an entry waits, preventing two active
+queue items from writing the same files. Network-active downloads keep the existing pause, resume,
+cancel, retry, and validator-safe recovery behavior described in [RESUME.md](RESUME.md).
 
 Queue state is local application data. It can include private URLs, destination paths, and timing
 information, so it must not be attached to public bug reports without redaction.

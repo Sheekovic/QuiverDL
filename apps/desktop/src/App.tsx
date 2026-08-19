@@ -219,15 +219,7 @@ function queueStatus(item: Pick<DownloadItem, "scheduledForMs">, settings: AppSe
   return settings.queueMode === "sequential" ? "queued" as const : "starting" as const;
 }
 
-function compareQueueOrder(left: DownloadItem, right: DownloadItem, nowMs: bigint) {
-  const leftDue = left.scheduledForMs === null || BigInt(left.scheduledForMs) <= nowMs
-    ? 0n
-    : BigInt(left.scheduledForMs);
-  const rightDue = right.scheduledForMs === null || BigInt(right.scheduledForMs) <= nowMs
-    ? 0n
-    : BigInt(right.scheduledForMs);
-  if (leftDue < rightDue) return -1;
-  if (leftDue > rightDue) return 1;
+function compareQueueOrder(left: DownloadItem, right: DownloadItem) {
   const leftTime = BigInt(left.queuedAtMs);
   const rightTime = BigInt(right.queuedAtMs);
   if (leftTime < rightTime) return -1;
@@ -264,6 +256,16 @@ function App() {
   const [proxyCredentialBusy, setProxyCredentialBusy] = useState(false);
   const stateLoaded = useRef(false);
   const recoveryQueue = useRef<DownloadItem[]>([]);
+  const registeredDownloads = useRef(new Set<string>());
+  const pendingCancellations = useRef(new Set<string>());
+  const recoveryGate = useRef<{ promise: Promise<void>; release: () => void } | null>(null);
+  if (recoveryGate.current === null) {
+    let release: () => void = () => undefined;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    recoveryGate.current = { promise, release };
+  }
   const [stateReady, setStateReady] = useState(false);
   const saveTimer = useRef<number | null>(null);
   const saveInFlight = useRef(false);
@@ -285,10 +287,9 @@ function App() {
           totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
           recoverable: item.status === "paused",
         }));
-        const recoveryNowMs = BigInt(Date.now());
         recoveryQueue.current = restored
           .filter((item) => item.status === "queued" || item.status === "scheduled")
-          .sort((left, right) => compareQueueOrder(left, right, recoveryNowMs));
+          .sort(compareQueueOrder);
         setDownloads(restored);
         stateLoaded.current = true;
         setStateReady(true);
@@ -304,17 +305,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!stateReady || recoveryQueue.current.length === 0) return;
+    if (!stateReady) return;
     const pending = recoveryQueue.current;
     recoveryQueue.current = [];
-    if (settings.queueMode === "parallel") {
-      for (const item of pending) void executeDownload(item, settings);
-      return;
-    }
     void (async () => {
+      const registered: DownloadItem[] = [];
       for (const item of pending) {
-        await executeDownload(item, settings);
+        if (await registerDownload(item, settings)) registered.push(item);
       }
+      recoveryGate.current?.release();
+      for (const item of registered) void executeDownload(item, settings);
     })();
   }, [stateReady]);
 
@@ -578,6 +578,7 @@ function App() {
     scheduledForMs: string | null = null,
   ) {
     const id = existingId ?? createTaskId();
+    pendingCancellations.current.delete(id);
     const queuedAtMs = Date.now().toString();
     const item: DownloadItem = {
       id,
@@ -649,7 +650,34 @@ function App() {
       }
     }
 
-    await executeDownload(item, settings);
+    await recoveryGate.current?.promise;
+    if (await registerDownload(item, settings)) {
+      void executeDownload(item, settings);
+    }
+  }
+
+  async function registerDownload(item: DownloadItem, executionSettings: AppSettings) {
+    if (pendingCancellations.current.has(item.id)) return false;
+    try {
+      await invoke("register_download", {
+        taskId: item.id,
+        queueMode: executionSettings.queueMode,
+        scheduledForMs: item.scheduledForMs,
+      });
+      registeredDownloads.current.add(item.id);
+      if (pendingCancellations.current.has(item.id)) {
+        await invoke("discard_registered_download", { taskId: item.id });
+        registeredDownloads.current.delete(item.id);
+        updateDownload(item.id, { status: "cancelled", error: undefined });
+        return false;
+      }
+      return true;
+    } catch (cause) {
+      registeredDownloads.current.delete(item.id);
+      void invoke("discard_registered_download", { taskId: item.id });
+      updateDownload(item.id, { status: "failed", error: String(cause) });
+      return false;
+    }
   }
 
   async function executeDownload(item: DownloadItem, executionSettings: AppSettings) {
@@ -660,14 +688,8 @@ function App() {
       recoverable: false,
     });
 
-    let releaseAdmission: () => void = () => undefined;
-    const admitted = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-
     const onEvent = new Channel<DownloadProgress>();
     onEvent.onmessage = (message) => {
-      releaseAdmission();
       updateDownload(id, (current) => ({
         status:
           current.status === "paused" ||
@@ -680,41 +702,39 @@ function App() {
       }));
     };
 
-    void invoke<DownloadSummary>("start_download", {
-      taskId: id,
-      url: sourceUrl,
-      destination,
-      settings: executionSettings,
-      scheduledForMs: item.scheduledForMs,
-      onEvent,
-    })
-      .then((summary) => {
-        updateDownload(id, {
-          status: "completed",
-          downloadedBytes: BigInt(summary.bytesWritten),
-          totalBytes: BigInt(summary.bytesWritten),
-          sha256: summary.sha256,
-          resumed: summary.resumed,
-        });
-        if (executionSettings.notifications) {
-          void notifyCompleted(destinationName(destination));
-        }
-      })
-      .catch((cause) => {
-        const failure = String(cause);
-        updateDownload(id, (current) => {
-          const cancelled =
-            current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
-          return {
-            status: cancelled ? "cancelled" : "failed",
-            error: cancelled ? undefined : failure,
-          };
-        });
-      })
-      .finally(() => {
-        releaseAdmission();
+    try {
+      const summary = await invoke<DownloadSummary>("start_download", {
+        taskId: id,
+        url: sourceUrl,
+        destination,
+        settings: executionSettings,
+        scheduledForMs: item.scheduledForMs,
+        onEvent,
       });
-    await admitted;
+      updateDownload(id, {
+        status: "completed",
+        downloadedBytes: BigInt(summary.bytesWritten),
+        totalBytes: BigInt(summary.bytesWritten),
+        sha256: summary.sha256,
+        resumed: summary.resumed,
+      });
+      if (executionSettings.notifications) {
+        void notifyCompleted(destinationName(destination));
+      }
+    } catch (cause) {
+      const failure = String(cause);
+      updateDownload(id, (current) => {
+        const cancelled =
+          current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
+        return {
+          status: cancelled ? "cancelled" : "failed",
+          error: cancelled ? undefined : failure,
+        };
+      });
+    } finally {
+      registeredDownloads.current.delete(id);
+      void invoke("discard_registered_download", { taskId: id });
+    }
   }
 
   function retryDownload(item: DownloadItem) {
@@ -784,6 +804,11 @@ function App() {
 
   async function controlDownload(item: DownloadItem, action: "pause" | "resume" | "cancel") {
     setError("");
+    if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
+      pendingCancellations.current.add(item.id);
+      updateDownload(item.id, { status: "cancelled", error: undefined });
+      return;
+    }
     try {
       await invoke("control_download", { taskId: item.id, action });
       updateDownload(item.id, {
@@ -800,6 +825,7 @@ function App() {
   }
 
   function removeDownload(id: string) {
+    pendingCancellations.current.delete(id);
     setDownloads((current) => current.filter((item) => item.id !== id));
   }
 
