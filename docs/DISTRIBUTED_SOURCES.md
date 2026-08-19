@@ -25,8 +25,9 @@ The detailed decisions live in [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.
   logged or included in telemetry. QuiverDL has no telemetry.
 - New protocols must have explicit queue states and resumable state formats. An HTTP recovery
   sidecar must never be interpreted as peer-to-peer state, or the reverse.
-- Browser integration must remain manual until the relevant backend has shipped, been reviewed,
-  and gives the user a complete confirmation screen before network activity.
+- Browser integration must remain manual until the relevant backend has shipped and been reviewed.
+  Metalink requires a complete plan before mirror requests. Magnets require explicit metadata-only
+  discovery consent followed by a second full-tree confirmation before content transfer.
 - A protocol backend may not weaken destination reservations, no-replace promotion, cancellation,
   resource limits, or final integrity verification.
 

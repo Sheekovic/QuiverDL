@@ -52,9 +52,10 @@ separate trust boundaries, documented in
 [DISTRIBUTED_SOURCES.md](DISTRIBUTED_SOURCES.md).
 
 A future Metalink implementation may provide HTTP(S) mirror fallback only after bounded XML
-parsing, complete pre-network preview, strong whole-file digest requirements, path containment, and
-the existing HTTP policies are enforced. Metalink metadata and its hashes do not authenticate the
-publisher by themselves. See [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.md).
+parsing, complete preview before listed-mirror requests, strong whole-file digest requirements,
+path containment, and extended redirect/address policies are enforced. Metalink metadata and its
+hashes do not authenticate the publisher by themselves. See
+[METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.md).
 
 BitTorrent remains deferred because trackers and peers introduce IP and content-identifier
 disclosure, uploading, untrusted peer-wire input, additional TCP/UDP transports, and multi-file

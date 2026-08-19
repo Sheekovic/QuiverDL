@@ -110,7 +110,8 @@ Before implementation begins, a proposal must:
 3. Define a versioned persistence format that never confuses torrent pieces with HTTP recovery
    sidecars and can recover safely after crashes.
 4. Specify transport-by-transport proxy behavior. Any enabled transport that bypasses the chosen
-   route must be disclosed and separately confirmed, otherwise startup fails closed.
+   route must be disabled or startup fails closed; user consent does not turn a routing bypass into
+   enforcement of the selected privacy policy.
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
    for malicious messages, hash failure, cancellation, private torrents, special-use addresses,
    mixed-address DNS answers, redirect changes, DNS rebinding, and resource exhaustion.

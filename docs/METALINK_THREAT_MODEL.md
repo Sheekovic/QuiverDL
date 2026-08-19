@@ -14,8 +14,9 @@ downloaded bytes to be checked against the described size and cryptographic hash
 ## Security goals
 
 - A Metalink cannot cause requests to its listed mirrors, writes, or directory creation before the
-  user sees and confirms the parsed plan. An explicitly requested metadata URL may be fetched under
-  the existing HTTP policy in order to build that plan.
+  user sees and confirms the parsed plan. An explicitly requested metadata URL may be fetched only
+  under the bounded scheme, redirect, address-classification, DNS-binding, proxy, and cancellation
+  rules below in order to build that plan.
 - Every completed file has a declared size and a valid SHA-256 digest from the confirmed Metalink.
 - No path can escape the destination root or replace an existing file.
 - A mirror cannot make QuiverDL forward origin credentials, cookies, authorization headers, proxy
@@ -72,6 +73,10 @@ QuiverDL applies stricter platform-aware containment:
 
 ## Network and integrity boundary
 
+- Fetching a remote Metalink document is an explicit user action and may retrieve only the bounded
+  metadata needed for preview. Classify its initial address and every redirect before connecting,
+  apply the same DNS-binding rules as mirror requests, and require separate approval before a public
+  metadata URL can enter a local or special-use address class.
 - The confirmation screen lists all destination-relative paths, total bytes, mirror hosts, and
   whether publisher authenticity is unverified. Confirmation precedes inspection or download
   requests to listed mirrors.
@@ -105,9 +110,10 @@ many failing URLs. Preview and confirmation prevent silent requests, while docum
 redirect, retry, connection, and disk limits contain amplification. The application must re-check
 available space before allocation and keep all writes streaming.
 
-Private, loopback, link-local, and local-network mirror targets require an additional per-download
-confirmation because a remotely supplied Metalink can otherwise turn the desktop into a request
-agent for internal services. DNS results must be revalidated on every connection to limit rebinding.
+Private, loopback, link-local, and local-network metadata or mirror targets require an additional
+per-download confirmation because a remotely supplied URL can otherwise turn the desktop into a
+request agent for internal services. DNS results must be revalidated on every connection to limit
+rebinding.
 
 ## Implementation acceptance gates
 
