@@ -7,12 +7,12 @@ and contributor feedback reveal better solutions.
 
 - [x] Native Rust HTTP and HTTPS transfer engine
 - [x] Partial-file staging and validator-gated resume decisions
-- [ ] Validate the returned `Content-Range` start before appending resumed bytes
+- [x] Validate the returned `Content-Range` start before appending resumed bytes
 - [x] Pause, cancel, progress, and SHA-256 primitives
 - [x] Tauri and React desktop foundation
 - [x] Local HTTP integration testing
 - [ ] Persistent queue and restart recovery
-- [ ] Wire real transfers into the desktop interface
+- [x] Wire real transfers into the desktop interface
 - [ ] Retry policy with backoff and clear failure states
 - [ ] Filename discovery from URL and `Content-Disposition`
 
@@ -26,9 +26,9 @@ and contributor feedback reveal better solutions.
 
 ## Desktop experience
 
-- [ ] Adaptive light and dark themes
-- [ ] Accessible keyboard-first queue controls
-- [ ] Destination picker and collision handling
+- [x] Adaptive light and dark themes
+- [x] Accessible keyboard-first queue controls
+- [x] Destination picker and collision handling
 - [ ] Notifications and system-tray behavior
 - [ ] Settings persistence
 - [ ] Localization foundation

@@ -24,15 +24,15 @@ native Rust engine with a lightweight Tauri and React desktop application.
 
 ## Current status
 
-The first engine slice supports HTTP and HTTPS transfers, staged partial files, resume decisions
-gated by matching remote validators, pause and cancel controls, progress events, and SHA-256
-verification. Response-range validation is still being hardened before resume is considered
-complete. The desktop app can inspect a URL through the Rust engine and report its size, resume
-support, and remote validators.
+The first engine slice supports HTTP and HTTPS transfers, staged partial files, validator-gated
+resume with response-range validation, pause and cancel controls, progress events, and SHA-256
+verification. The desktop app can inspect a URL, open a native Save As dialog, run real downloads,
+show ordered progress, pause or resume active work, cancel safely, and filter completed or failed
+items. Its interface follows the operating system's light or dark theme.
 
-The next major milestones are wiring transfers into the desktop queue, persistent crash recovery,
-and bounded multi-segment downloading. See the [roadmap](ROADMAP.md) for approachable tasks and
-longer-term direction.
+The next major milestones are persistent queue and crash recovery, retry policy, filename discovery
+from response headers, and bounded multi-segment downloading. See the [roadmap](ROADMAP.md) for
+approachable tasks and longer-term direction.
 
 ## Get involved
 
