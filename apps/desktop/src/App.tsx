@@ -768,12 +768,13 @@ function App() {
               Routing
               <select
                 value={proxyDraft.proxyMode}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setProxyPassword("");
                   setProxyDraft((current) => ({
                     ...current,
                     proxyMode: event.target.value as AppSettings["proxyMode"],
-                  }))
-                }
+                  }));
+                }}
               >
                 <option value="disabled">Direct connection</option>
                 <option value="system">System proxy</option>
@@ -813,6 +814,7 @@ function App() {
                     value={proxyDraft.proxyUsername}
                     autoComplete="username"
                     onChange={(event) => {
+                      setProxyPassword("");
                       setProxyCredentialsPresent(false);
                       setProxyDraft((current) => ({
                         ...current,
