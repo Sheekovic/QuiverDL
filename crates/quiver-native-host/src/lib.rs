@@ -152,14 +152,23 @@ fn sanitize_filename(value: &str) -> Option<String> {
 
 fn write_inbox_request(inbox: &Path, request: &InboxRequest) -> io::Result<()> {
     fs::create_dir_all(inbox)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(inbox, fs::Permissions::from_mode(0o700))?;
+    }
     let destination = inbox.join(format!("{}.json", request.id));
     let temporary = inbox.join(format!("{}.tmp", request.id));
     let bytes = serde_json::to_vec(request)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
     drop(file);

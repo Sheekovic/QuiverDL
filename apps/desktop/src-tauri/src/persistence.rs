@@ -233,10 +233,26 @@ pub(crate) async fn save_app_state(
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(|error| format!("Could not create the application data directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .await
+            .map_err(|error| {
+                format!("Could not protect the application data directory: {error}")
+            })?;
+    }
     let temporary = store.path.with_extension("json.tmp");
     let mut file = tokio::fs::File::create(&temporary)
         .await
         .map_err(|error| format!("Could not create the queue file: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(|error| format!("Could not protect the queue file: {error}"))?;
+    }
     file.write_all(&bytes)
         .await
         .map_err(|error| format!("Could not write the queue: {error}"))?;

@@ -42,6 +42,13 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
         && config.token.len() == 64
         && config.token.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .await
+                .map_err(|error| format!("Could not protect bridge settings: {error}"))?;
+        }
         return Ok((path, config));
     }
 
@@ -65,6 +72,13 @@ async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     .await
     .map_err(|error| format!("Bridge commit task failed: {error}"))?
     .map_err(|error| format!("Could not commit bridge settings: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .await
+            .map_err(|error| format!("Could not protect bridge settings: {error}"))?;
+    }
     Ok((path, config))
 }
 
