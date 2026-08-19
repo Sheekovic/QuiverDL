@@ -28,9 +28,11 @@ that passed while QuiverDL was closed becomes due immediately.
 
 Queued and scheduled entries can be cancelled before any request is sent. Cancellation requested
 while a ticket is being registered is retained and applied as soon as registration completes.
-Destination and recovery sidecar paths are reserved while an entry waits, preventing two active
-queue items from writing the same files. Network-active downloads keep the existing pause, resume,
-cancel, retry, and validator-safe recovery behavior described in [RESUME.md](RESUME.md).
+After a sequential entry is admitted, its destination and recovery sidecar paths are reserved
+before network transfer begins. This preserves FIFO ownership when queued entries target the same
+files and prevents active transfers from sharing those paths. Network-active downloads keep the
+existing pause, resume, cancel, retry, and validator-safe recovery behavior described in
+[RESUME.md](RESUME.md).
 
 Queue state is local application data. It can include private URLs, destination paths, and timing
 information, so it must not be attached to public bug reports without redaction.
