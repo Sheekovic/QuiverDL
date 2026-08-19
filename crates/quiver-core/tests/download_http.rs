@@ -83,6 +83,43 @@ async fn downloads_and_merges_validated_parallel_segments() {
 }
 
 #[tokio::test]
+async fn retains_completed_segments_until_verification_succeeds() {
+    let (url, server, _fixture) = segmented_fixture_server().await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let destination = directory.path().join("parallel.bin");
+    let mut request = DownloadRequest::new(url, &destination);
+    request.expected_sha256 = Some([0_u8; 32]);
+    request.transfer_policy = TransferPolicy {
+        max_segments: 3,
+        max_connections_per_host: 3,
+        min_segment_bytes: 1024 * 1024,
+        per_download_speed_limit_bps: None,
+    };
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(128);
+    drop(progress_rx);
+
+    let error = DownloadEngine::new()
+        .expect("engine should initialize")
+        .download(request, DownloadControl::new(), progress_tx)
+        .await
+        .expect_err("incorrect checksum should fail verification");
+    assert!(matches!(error, Error::ChecksumMismatch));
+    for index in 0..3 {
+        let segment = directory
+            .path()
+            .join(format!("parallel.bin.quiver-part.segment-{index}"));
+        assert!(
+            tokio::fs::try_exists(segment)
+                .await
+                .expect("segment path should be inspectable")
+        );
+    }
+    server
+        .await
+        .expect("segmented fixture server should finish");
+}
+
+#[tokio::test]
 async fn downloads_verifies_and_promotes_a_file() {
     let (url, server) = fixture_server(2).await;
     let directory = tempfile::tempdir().expect("temporary directory");

@@ -471,13 +471,6 @@ impl DownloadEngine {
         }
         .await;
 
-        if transfer_result.is_ok() {
-            for path in segment_paths {
-                if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                    let _ = tokio::fs::remove_file(path).await;
-                }
-            }
-        }
         transfer_result.map(|downloaded| (downloaded, resumed))
     }
 }
@@ -665,7 +658,6 @@ async fn finish_download(
         return Err(Error::ChecksumMismatch);
     }
 
-    remove_segment_files(partial_path).await?;
     control.checkpoint().await?;
     promote_partial(
         partial_path,
@@ -676,6 +668,7 @@ async fn finish_download(
     if tokio::fs::try_exists(state_path).await? {
         tokio::fs::remove_file(state_path).await?;
     }
+    let _ = remove_segment_files(partial_path).await;
     emit(
         progress,
         request,

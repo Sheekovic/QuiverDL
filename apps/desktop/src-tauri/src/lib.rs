@@ -125,6 +125,7 @@ async fn start_download(
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
     let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
+    settings.validate()?;
     registry
         .global_limiter
         .set_bytes_per_second(settings.global_speed_limit_bps.unwrap_or(0));

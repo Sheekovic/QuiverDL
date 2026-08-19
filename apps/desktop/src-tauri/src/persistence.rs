@@ -55,7 +55,7 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    fn validate(&self) -> Result<(), String> {
+    pub(crate) fn validate(&self) -> Result<(), String> {
         if !matches!(self.theme.as_str(), "system" | "light" | "dark") {
             return Err("Unsupported theme setting".into());
         }
