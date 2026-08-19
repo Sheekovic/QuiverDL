@@ -252,6 +252,8 @@ async fn resumes_only_from_the_requested_content_range() {
     let (url, server) = resume_fixture_server(RESUME_OFFSET).await;
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
+    let partial = directory.path().join("fixture.bin.quiver-part");
+    let state = directory.path().join("fixture.bin.quiver.json");
     write_resume_files(directory.path(), &url).await;
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
     drop(progress_rx);
@@ -274,6 +276,102 @@ async fn resumes_only_from_the_requested_content_range() {
             .expect("completed file should exist"),
         FIXTURE
     );
+    assert!(
+        !tokio::fs::try_exists(partial)
+            .await
+            .expect("partial path can be checked")
+    );
+    assert!(
+        !tokio::fs::try_exists(state)
+            .await
+            .expect("state path can be checked")
+    );
+    server.await.expect("fixture server should finish");
+}
+
+#[tokio::test]
+async fn restarts_from_zero_when_the_remote_validator_changes() {
+    let (url, server) = changed_validator_server().await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let destination = directory.path().join("fixture.bin");
+    let partial = directory.path().join("fixture.bin.quiver-part");
+    let state = directory.path().join("fixture.bin.quiver.json");
+    write_resume_files(directory.path(), &url).await;
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
+
+    let result = DownloadEngine::new()
+        .expect("engine should initialize")
+        .download(
+            DownloadRequest::new(url, &destination),
+            DownloadControl::new(),
+            progress_tx,
+        )
+        .await
+        .expect("changed content should restart safely");
+
+    assert!(!result.resumed);
+    assert_eq!(
+        tokio::fs::read(&destination)
+            .await
+            .expect("completed file should exist"),
+        FIXTURE
+    );
+    assert!(
+        !tokio::fs::try_exists(partial)
+            .await
+            .expect("partial path can be checked")
+    );
+    assert!(
+        !tokio::fs::try_exists(state)
+            .await
+            .expect("state path can be checked")
+    );
+    server.await.expect("fixture server should finish");
+}
+
+#[tokio::test]
+async fn rejects_a_server_that_ignores_a_validated_resume_request() {
+    let (url, server) = ignored_resume_server().await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let destination = directory.path().join("fixture.bin");
+    let partial = directory.path().join("fixture.bin.quiver-part");
+    let state = directory.path().join("fixture.bin.quiver.json");
+    write_resume_files(directory.path(), &url).await;
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
+
+    let error = DownloadEngine::new()
+        .expect("engine should initialize")
+        .download(
+            DownloadRequest::new(url, &destination),
+            DownloadControl::new(),
+            progress_tx,
+        )
+        .await
+        .expect_err("a full response must not be appended to a partial file");
+
+    assert!(
+        error
+            .to_string()
+            .contains("server refused a validated resume request")
+    );
+    assert_eq!(
+        tokio::fs::read(&partial)
+            .await
+            .expect("partial file should remain recoverable"),
+        &FIXTURE[..RESUME_OFFSET]
+    );
+    assert!(
+        tokio::fs::try_exists(&state)
+            .await
+            .expect("state path can be checked")
+    );
+    assert!(
+        !tokio::fs::try_exists(destination)
+            .await
+            .expect("destination can be checked")
+    );
     server.await.expect("fixture server should finish");
 }
 
@@ -283,6 +381,7 @@ async fn rejects_a_mismatched_resume_range_without_appending() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let destination = directory.path().join("fixture.bin");
     let partial = directory.path().join("fixture.bin.quiver-part");
+    let state = directory.path().join("fixture.bin.quiver.json");
     write_resume_files(directory.path(), &url).await;
     let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
     drop(progress_rx);
@@ -307,6 +406,11 @@ async fn rejects_a_mismatched_resume_range_without_appending() {
             .await
             .expect("partial file should remain recoverable"),
         &FIXTURE[..RESUME_OFFSET]
+    );
+    assert!(
+        tokio::fs::try_exists(state)
+            .await
+            .expect("state path can be checked")
     );
     assert!(
         !tokio::fs::try_exists(destination)
@@ -745,6 +849,10 @@ async fn resume_fixture_server(response_start: usize) -> (Url, tokio::task::Join
                     request.contains(&format!("Range: bytes={RESUME_OFFSET}-"))
                         || request.contains(&format!("range: bytes={RESUME_OFFSET}-"))
                 );
+                assert!(
+                    request.contains("If-Range: fixture-v1")
+                        || request.contains("if-range: fixture-v1")
+                );
                 let body = &FIXTURE[response_start..];
                 let headers = format!(
                     "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nAccept-Ranges: bytes\r\nETag: fixture-v1\r\nConnection: close\r\n\r\n",
@@ -764,6 +872,94 @@ async fn resume_fixture_server(response_start: usize) -> (Url, tokio::task::Join
         }
     });
 
+    (
+        Url::parse(&format!("http://{address}/fixture.bin")).expect("fixture URL"),
+        task,
+    )
+}
+
+async fn changed_validator_server() -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("fixture server should bind");
+    let address = listener.local_addr().expect("fixture address");
+    let task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+
+            let response = if request.contains("range: bytes=0-0") {
+                let headers = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/{}\r\nAccept-Ranges: bytes\r\nETag: fixture-v2\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len()
+                );
+                [headers.as_bytes(), &FIXTURE[..1]].concat()
+            } else {
+                assert!(!request.contains("range:"));
+                assert!(!request.contains("if-range:"));
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: fixture-v2\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len()
+                );
+                [headers.as_bytes(), FIXTURE].concat()
+            };
+
+            socket
+                .write_all(&response)
+                .await
+                .expect("response should write");
+            socket.shutdown().await.expect("socket should close");
+        }
+    });
+    (
+        Url::parse(&format!("http://{address}/fixture.bin")).expect("fixture URL"),
+        task,
+    )
+}
+
+async fn ignored_resume_server() -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("fixture server should bind");
+    let address = listener.local_addr().expect("fixture address");
+    let task = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+
+            let response = if request.contains("range: bytes=0-0") {
+                let headers = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/{}\r\nAccept-Ranges: bytes\r\nETag: fixture-v1\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len()
+                );
+                [headers.as_bytes(), &FIXTURE[..1]].concat()
+            } else {
+                assert!(request.contains(&format!("range: bytes={RESUME_OFFSET}-")));
+                assert!(request.contains("if-range: fixture-v1"));
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: fixture-v1\r\nConnection: close\r\n\r\n",
+                    FIXTURE.len()
+                );
+                [headers.as_bytes(), FIXTURE].concat()
+            };
+
+            socket
+                .write_all(&response)
+                .await
+                .expect("response should write");
+            socket.shutdown().await.expect("socket should close");
+        }
+    });
     (
         Url::parse(&format!("http://{address}/fixture.bin")).expect("fixture URL"),
         task,
