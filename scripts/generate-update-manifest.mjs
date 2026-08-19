@@ -10,6 +10,64 @@ const SUPPORTED_PLATFORMS = [
 ];
 const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 16 * 1024;
+const base64Pattern = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+function decodeCanonicalBase64(value, label) {
+  if (value.length === 0 || value.length % 4 !== 0 || !base64Pattern.test(value)) {
+    throw new Error(`${label} is not canonical base64`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) {
+    throw new Error(`${label} is not canonical base64`);
+  }
+  return decoded;
+}
+
+export function validateUpdaterSignature(value, platform) {
+  const signature = value.trim();
+  const decodedBytes = decodeCanonicalBase64(signature, `${platform}: signature`);
+  let decoded;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(decodedBytes);
+  } catch {
+    throw new Error(`${platform}: signature does not encode UTF-8 Minisign text`);
+  }
+
+  const lines = decoded.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  if (
+    lines.length !== 4 ||
+    lines[0] !== "untrusted comment: signature from minisign secret key" ||
+    !lines[2].startsWith("trusted comment: ") ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(lines[2])
+  ) {
+    throw new Error(`${platform}: signature does not encode a Tauri Minisign signature`);
+  }
+
+  const signaturePacket = decodeCanonicalBase64(lines[1], `${platform}: signature packet`);
+  const globalSignature = decodeCanonicalBase64(lines[3], `${platform}: global signature`);
+  const algorithm = signaturePacket.subarray(0, 2).toString("ascii");
+  if (
+    signaturePacket.length !== 74 ||
+    !["Ed", "ED"].includes(algorithm) ||
+    globalSignature.length !== 64
+  ) {
+    throw new Error(`${platform}: signature contains an unsupported Minisign packet`);
+  }
+  if (
+    signaturePacket.subarray(10).every((byte) => byte === 0) ||
+    globalSignature.every((byte) => byte === 0)
+  ) {
+    throw new Error(`${platform}: signature contains an invalid all-zero signature value`);
+  }
+
+  return {
+    keyId: signaturePacket.subarray(2, 10).toString("hex"),
+    signature,
+  };
+}
 
 function parseVersion(version) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
@@ -62,13 +120,16 @@ async function platformEntry(platform, artifactPath, baseUrl) {
   if (signatureInfo.size < 1 || signatureInfo.size > MAX_SIGNATURE_BYTES) {
     throw new Error(`${platform}: signature size is outside the accepted limit`);
   }
-  const signature = (await readFile(signaturePath, "utf8")).trim();
-  if (!signature || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(signature)) {
-    throw new Error(`${platform}: signature is empty or contains control characters`);
-  }
+  const validatedSignature = validateUpdaterSignature(
+    await readFile(signaturePath, "utf8"),
+    platform,
+  );
   return {
-    signature,
-    url: `${baseUrl}/${encodeURIComponent(fileName)}`,
+    entry: {
+      signature: validatedSignature.signature,
+      url: `${baseUrl}/${encodeURIComponent(fileName)}`,
+    },
+    keyId: validatedSignature.keyId,
   };
 }
 
@@ -83,7 +144,7 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   const identityKeys = [];
   for (const platform of keys) {
     const canonicalPath = await realpath(artifacts[platform]);
-    const info = await lstat(canonicalPath);
+    const info = await lstat(canonicalPath, { bigint: true });
     pathKeys.push(pathKey(canonicalPath));
     identityKeys.push(`${info.dev}:${info.ino}`);
   }
@@ -93,14 +154,34 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   ) {
     throw new Error("Each platform must use a distinct updater artifact file identity");
   }
+  const allSignedInputIdentities = [...identityKeys];
+  for (const platform of keys) {
+    const canonicalSignaturePath = await realpath(`${artifacts[platform]}.sig`);
+    const signatureInfo = await lstat(canonicalSignaturePath, { bigint: true });
+    allSignedInputIdentities.push(`${signatureInfo.dev}:${signatureInfo.ino}`);
+  }
+  if (new Set(allSignedInputIdentities).size !== allSignedInputIdentities.length) {
+    throw new Error("Every updater artifact and signature must use a distinct file identity");
+  }
   const platforms = {};
   const urls = new Set();
+  const signatures = new Set();
+  const signingKeyIds = new Set();
   for (const platform of SUPPORTED_PLATFORMS) {
-    platforms[platform] = await platformEntry(platform, artifacts[platform], canonicalBaseUrl);
+    const validated = await platformEntry(platform, artifacts[platform], canonicalBaseUrl);
+    platforms[platform] = validated.entry;
+    signingKeyIds.add(validated.keyId);
     if (urls.has(platforms[platform].url)) {
       throw new Error("Each platform must produce a distinct updater artifact URL");
     }
+    if (signatures.has(platforms[platform].signature)) {
+      throw new Error("Each platform must use a distinct updater signature");
+    }
     urls.add(platforms[platform].url);
+    signatures.add(platforms[platform].signature);
+  }
+  if (signingKeyIds.size !== 1) {
+    throw new Error("Every platform must be signed by the same updater key identifier");
   }
   return {
     version,

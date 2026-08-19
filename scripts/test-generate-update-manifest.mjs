@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { link, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,10 +10,20 @@ const platforms = ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x
 
 async function fixture(directory) {
   const artifacts = {};
-  for (const platform of platforms) {
+  for (const [index, platform] of platforms.entries()) {
     const artifact = path.join(directory, `QuiverDL-${platform}.bin`);
     await writeFile(artifact, `artifact:${platform}`);
-    await writeFile(`${artifact}.sig`, `untrusted comment: test\nTEST-SIGNATURE-${platform}`);
+    const packet = Buffer.alloc(74, index + 1);
+    packet.write("ED", 0, "ascii");
+    Buffer.from("0102030405060708", "hex").copy(packet, 2);
+    const globalSignature = Buffer.alloc(64, index + 17);
+    const minisign = [
+      "untrusted comment: signature from minisign secret key",
+      packet.toString("base64"),
+      `trusted comment: timestamp:1787155200\tfile:${path.basename(artifact)}\tprehashed`,
+      globalSignature.toString("base64"),
+    ].join("\n");
+    await writeFile(`${artifact}.sig`, Buffer.from(`${minisign}\n`).toString("base64"));
     artifacts[platform] = artifact;
   }
   return artifacts;
@@ -120,6 +130,53 @@ test("creates manifest output once without aliasing signed inputs", async () => 
       writeNewManifest(artifacts["linux-x86_64"], "{}\n", artifacts),
       /must not alias/,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects malformed, secret, aliased, and inconsistent sibling signatures", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const artifacts = await fixture(directory);
+    const options = {
+      version: "1.2.3",
+      baseUrl: "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3",
+      artifacts,
+    };
+    await writeFile(`${artifacts["linux-x86_64"]}.sig`, "not a signature");
+    await assert.rejects(generateManifest(options), /signature is not canonical base64/);
+
+    const secret = Buffer.from(
+      "untrusted comment: minisign encrypted secret key\nRWRTY0IyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+    ).toString("base64");
+    await writeFile(`${artifacts["linux-x86_64"]}.sig`, secret);
+    await assert.rejects(generateManifest(options), /does not encode a Tauri Minisign signature/);
+
+    const duplicate = await readFile(`${artifacts["windows-x86_64"]}.sig`, "utf8");
+    await writeFile(`${artifacts["linux-x86_64"]}.sig`, duplicate);
+    await assert.rejects(generateManifest(options), /distinct updater signature/);
+
+    await fixture(directory);
+    await rm(`${artifacts["linux-x86_64"]}.sig`);
+    await link(
+      `${artifacts["windows-x86_64"]}.sig`,
+      `${artifacts["linux-x86_64"]}.sig`,
+    );
+    await assert.rejects(generateManifest(options), /distinct file identity/);
+
+    await rm(`${artifacts["linux-x86_64"]}.sig`);
+    await fixture(directory);
+    const encoded = await readFile(`${artifacts["linux-x86_64"]}.sig`, "utf8");
+    const lines = Buffer.from(encoded, "base64").toString("utf8").trim().split("\n");
+    const packet = Buffer.from(lines[1], "base64");
+    packet[2] ^= 0xff;
+    lines[1] = packet.toString("base64");
+    await writeFile(
+      `${artifacts["linux-x86_64"]}.sig`,
+      Buffer.from(`${lines.join("\n")}\n`).toString("base64"),
+    );
+    await assert.rejects(generateManifest(options), /same updater key identifier/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
