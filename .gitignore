@@ -8,4 +8,5 @@
 .DS_Store
 Thumbs.db
 apps/desktop/src-tauri/tauri.updater.conf.json
-
+apps/desktop/src-tauri/tauri.microsoftstore.release.conf.json
+apps/desktop/src-tauri/tauri.microsoftstore.release.conf.json.tmp

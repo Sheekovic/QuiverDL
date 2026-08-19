@@ -1,0 +1,62 @@
+name: quiverdl
+base: core24
+version: '0.1.0'
+summary: Fast, private, and reliable download manager
+description: |
+  QuiverDL is a performance-first open-source download manager with a native
+  Rust transfer engine, safe restart recovery, and no accounts or telemetry.
+grade: stable
+confinement: strict
+
+apps:
+  quiverdl:
+    command: usr/bin/quiver-desktop
+    desktop: usr/share/applications/QuiverDL.desktop
+    extensions: [gnome]
+    plugs:
+      - home
+      - network
+      - network-status
+      - password-manager-service
+      - removable-media
+      - quiverdl-single-instance
+    slots:
+      - quiverdl-single-instance
+
+plugs:
+  quiverdl-single-instance:
+    interface: dbus
+    bus: session
+    name: app.quiverdl.desktop.SingleInstance
+
+slots:
+  quiverdl-single-instance:
+    interface: dbus
+    bus: session
+    name: app.quiverdl.desktop.SingleInstance
+
+parts:
+  quiverdl:
+    plugin: dump
+    source: .
+    build-snaps:
+      - node/22/stable
+      - rustup/latest/stable
+    build-packages:
+      - build-essential
+      - curl
+      - file
+      - libayatana-appindicator3-dev
+      - librsvg2-dev
+      - libssl-dev
+      - libwebkit2gtk-4.1-dev
+      - libxdo-dev
+      - wget
+    stage-packages:
+      - libayatana-appindicator3-1
+      - libwebkit2gtk-4.1-0
+    override-build: |
+      set -eu
+      npm ci --prefix apps/desktop
+      npm run tauri --prefix apps/desktop -- build --bundles deb
+      dpkg -x target/release/bundle/deb/*.deb "$SNAPCRAFT_PART_INSTALL"

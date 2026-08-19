@@ -3,11 +3,16 @@
   "name": "QuiverDL Browser Companion",
   "version": "0.1.0",
   "description": "Send explicitly selected downloads to QuiverDL.",
+  "icons": { "128": "icons/icon-128.png" },
   "permissions": ["contextMenus", "downloads", "nativeMessaging", "storage"],
   "background": { "scripts": ["background.js"] },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "action": { "default_title": "QuiverDL" },
   "browser_specific_settings": {
-    "gecko": { "id": "quiverdl@quiverdl.app", "strict_min_version": "128.0" }
+    "gecko": {
+      "id": "quiverdl@quiverdl.app",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": { "required": ["none"] }
+    }
   }
 }
