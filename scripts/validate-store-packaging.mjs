@@ -19,6 +19,10 @@ const firefox = await readJson("extensions", "firefox", "manifest.json");
 const firefoxHost = await readJson("extensions", "native-host", "firefox-host.json");
 const cargoWorkspace = await readFile(path.join(repository, "Cargo.toml"), "utf8");
 const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
+const msixManifest = await readFile(
+  path.join(repository, "packaging", "windows", "msix", "AppxManifest.xml.template"),
+  "utf8",
+);
 
 assert.equal(chromium.manifest_version, 3);
 assert.equal(firefox.manifest_version, 3);
@@ -52,6 +56,15 @@ assert.deepEqual(
 );
 assert.equal(microsoft.bundle.windows.webviewInstallMode.type, "offlineInstaller");
 assert.notEqual(microsoft.bundle.publisher, desktop.productName);
+assert.match(msixManifest, /Name="SHEEKOVIC\.QuiverDL"/);
+assert.match(
+  msixManifest,
+  /Publisher="CN=BC484461-F987-4E7B-82B4-47D7995725CA"/,
+);
+assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
+assert.match(msixManifest, /ProcessorArchitecture="x64"/);
+assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
+assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
 assert.match(
   snapcraft,
   new RegExp(`^version: ['"]${desktop.version.replaceAll(".", "\\.")}['"]$`, "m"),
