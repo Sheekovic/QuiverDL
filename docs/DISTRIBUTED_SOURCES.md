@@ -6,7 +6,7 @@ network policy, and security review.
 
 | Area | Metalink | BitTorrent |
 | --- | --- | --- |
-| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | `.torrent` metainfo or a magnet URI |
+| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | `.torrent` metainfo; magnets are offline-only |
 | Network model | Known HTTP(S) mirrors | Trackers and many untrusted peers over additional protocols |
 | Integrity | Publisher-provided size and SHA-256 | V2 SHA-256 Merkle data; v1-only is inspector-only |
 | Privacy change | Mirror operators learn requests | Trackers and peers can learn the user's IP address and swarm identifier |
@@ -26,8 +26,8 @@ The detailed decisions live in [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.
 - New protocols must have explicit queue states and resumable state formats. An HTTP recovery
   sidecar must never be interpreted as peer-to-peer state, or the reverse.
 - Browser integration must remain manual until the relevant backend has shipped and been reviewed.
-  Metalink requires a complete plan before mirror requests. Magnets require explicit metadata-only
-  discovery consent followed by a second full-tree confirmation before content transfer.
+  Metalink requires a complete plan before mirror requests. Magnet networking remains deferred and
+  offline inspection cannot enqueue or resolve metadata.
 - A protocol backend may not weaken destination reservations, no-replace promotion, cancellation,
   resource limits, or final integrity verification.
 

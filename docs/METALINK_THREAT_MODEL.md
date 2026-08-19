@@ -51,6 +51,9 @@ The parser must be a UI-independent Rust component with deterministic tests and 
   decoded hash length, and total piece-hash entries before allocation.
 - Require exactly one non-negative size representable as `u64` and at least one correctly sized
   SHA-256 whole-file hash for every accepted file. MD5 and SHA-1 never satisfy the integrity gate.
+- Accumulate file sizes with checked arithmetic and reject a document whose aggregate exceeds
+  `u64::MAX`. Preserve per-file and aggregate counts losslessly across Rust, IPC, persistence, and
+  UI preview boundaries.
 - Reject duplicate or contradictory size, filename, hash, and piece-set declarations rather than
   selecting one silently.
 - Reject `metaurl`, `origin`, dynamic refresh, FTP, peer-to-peer, and unknown URL schemes in the
@@ -127,8 +130,8 @@ rebinding.
 
 ## Implementation acceptance gates
 
-- Bounded parser tests cover malformed XML, entity expansion attempts, numeric overflow, duplicate
-  fields, unsupported hashes and schemes, deep nesting, and limit edges.
+- Bounded parser tests cover malformed XML, entity expansion attempts, per-file and aggregate
+  numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
   Unicode/case collisions, symlink races, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,

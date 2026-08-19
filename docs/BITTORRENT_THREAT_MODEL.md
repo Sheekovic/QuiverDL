@@ -46,17 +46,15 @@ peers, or addresses aimed at local services.
   case-folded collisions.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
-- For a `.torrent` file, present the full file tree and exact selected byte total before allocation
-  or network discovery. A magnet requires two stages because its file tree is not available yet:
-  first confirm narrowly bounded metadata discovery with its IP/discovery privacy effects, then
-  hash-check and validate the metadata and present the full tree for a second confirmation before
-  allocation, content-piece requests, or uploading.
+- For a local `.torrent` file, present the full file tree and exact selected byte total before
+  allocation or network discovery.
+- Magnet URIs may be parsed and displayed offline but cannot resolve metadata or enter the transfer
+  queue in the first networked backend. Because the private flag is unavailable before metadata
+  retrieval, DHT, peer exchange, or public tracker discovery could disclose a private torrent too
+  early. Magnet networking requires a later, separate threat model; private magnets remain
+  unsupported until privacy can be established before discovery.
 - Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
-  accounted for and removed safely. Cancelling between magnet consent stages stops discovery and
-  discards its temporary metadata safely.
-- Bound and hash-check metadata received through a magnet before showing it as trusted. A matching
-  info-hash identifies the requested metadata but does not authenticate its publisher or make its
-  filenames safe.
+  accounted for and removed safely.
 
 ## Content integrity
 
@@ -76,9 +74,7 @@ distinguish **piece-verified** from **publisher-authenticated**.
 
 - Before any network discovery, an initial confirmation must explain that the user's IP address and
   torrent identifier can be visible, that downloading normally uploads pieces, which trackers and
-  discovery mechanisms will run, and when network activity will stop. For a magnet, this first
-  consent authorizes metadata retrieval only; verified file selection and content transfer require
-  the second confirmation described above.
+  discovery mechanisms will run, and when network activity will stop.
 - No tracker contact, DNS lookup, DHT lookup, local discovery, peer connection, listener, or port
   mapping occurs before confirmation. Browser interception for `.torrent` and magnet links remains
   disabled until a separate reviewed integration milestone.
@@ -93,8 +89,9 @@ distinguish **piece-verified** from **publisher-authenticated**.
   and seeding after completion are individually modeled features, not implicit defaults.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
   rate, download rate, and share duration are bounded globally and per torrent.
-- Tracker URLs and magnets may contain private passkeys. Store them only in protected local state,
-  redact them from errors and logs, and never include them in public diagnostics.
+- Tracker URLs and magnets may contain private passkeys. Redact both from errors and logs, never
+  include them in public diagnostics, and do not persist an offline-inspected magnet. Store tracker
+  URLs only in protected local state.
 - Private torrents must follow [BEP 27](https://www.bittorrent.org/beps/bep_0027.html): contact only
   the private tracker and peers it returns, with DHT, peer exchange, and local discovery disabled.
 - Pause and quit semantics must say whether announcing, uploading, and listeners stop. **Stopped**

@@ -14,9 +14,8 @@ Review this checklist for changes touching transfers, paths, persistence, browse
 - Native bridge directories and token files are private before any secret bytes are written.
 - Browser interception remains off by default and does not forward cookies, credentials, history, or page content.
 - Distributed metadata is bounded before parsing and cannot select paths outside the confirmed
-  destination root. Metalink requires a complete preview before listed-mirror requests; a magnet
-  requires metadata-only discovery consent and then a second full-tree confirmation before content
-  transfer, uploading, or destination activity.
+  destination root. Metalink requires a complete preview before listed-mirror requests. Magnet
+  networking remains deferred; offline inspection cannot resolve metadata or enqueue a transfer.
 - Metalink mirrors cannot inherit origin credentials; every completed file requires its confirmed
   size and a SHA-256-or-stronger whole-file digest before promotion. Phase one ignores RFC 6249
   response metadata and fails closed when a proxy cannot prove destination-address binding.
