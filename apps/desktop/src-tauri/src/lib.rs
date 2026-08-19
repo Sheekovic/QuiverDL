@@ -70,26 +70,22 @@ struct SequentialQueue {
 
 #[derive(Default)]
 struct SequentialQueueState {
-    next_ticket: u64,
     active_ticket: Option<u64>,
     entries: BTreeMap<u64, Option<u64>>,
 }
 
 impl SequentialQueue {
-    fn register(&self, scheduled_for_ms: Option<u64>) -> Result<u64, String> {
+    fn register(&self, ticket: u64, scheduled_for_ms: Option<u64>) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "The sequential queue is unavailable".to_string())?;
-        let ticket = state.next_ticket;
-        state.next_ticket = state
-            .next_ticket
-            .checked_add(1)
-            .ok_or_else(|| "The sequential queue has exhausted its ticket range".to_string())?;
-        state.entries.insert(ticket, scheduled_for_ms);
+        if state.entries.insert(ticket, scheduled_for_ms).is_some() {
+            return Err("A download with this queue sequence is already registered".into());
+        }
         drop(state);
         self.changed.notify_waiters();
-        Ok(ticket)
+        Ok(())
     }
 
     fn remove(&self, ticket: u64) {
@@ -224,6 +220,7 @@ fn register_download(
     registry: State<'_, TransferRegistry>,
     task_id: String,
     queue_mode: String,
+    queue_sequence: String,
     scheduled_for_ms: Option<String>,
 ) -> Result<(), String> {
     let task_id = validate_task_id(&task_id)?;
@@ -234,6 +231,7 @@ fn register_download(
         .as_deref()
         .map(parse_queue_timestamp)
         .transpose()?;
+    let queue_sequence = parse_queue_sequence(&queue_sequence)?;
     let mut transfers = registry
         .transfers
         .lock()
@@ -242,7 +240,10 @@ fn register_download(
         return Err("A download with this identifier is already registered".into());
     }
     let queue_ticket = if queue_mode == "sequential" {
-        Some(registry.sequential_queue.register(scheduled_for_ms)?)
+        registry
+            .sequential_queue
+            .register(queue_sequence, scheduled_for_ms)?;
+        Some(queue_sequence)
     } else {
         None
     };
@@ -421,6 +422,15 @@ pub(crate) fn parse_queue_timestamp(value: &str) -> Result<u64, String> {
         return Err("A queue timestamp is outside the supported range".into());
     }
     Ok(timestamp)
+}
+
+pub(crate) fn parse_queue_sequence(value: &str) -> Result<u64, String> {
+    if value.is_empty() || value.len() > 20 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("A queue sequence is invalid".into());
+    }
+    value
+        .parse::<u64>()
+        .map_err(|_| "A queue sequence is outside the supported range".to_string())
 }
 
 fn unix_time_ms() -> Result<u64, String> {
@@ -812,9 +822,9 @@ mod tests {
 
     use super::{
         ActiveTransfer, AppSettings, DownloadProgress, SequentialQueue, TransferRegistry,
-        claim_registered_transfer, parse_queue_timestamp, prepare_destination, proxy_policy,
-        sanitize_filename, schedule_sleep_duration, validate_destination, validate_task_id,
-        wait_for_queue_turn,
+        claim_registered_transfer, parse_queue_sequence, parse_queue_timestamp,
+        prepare_destination, proxy_policy, sanitize_filename, schedule_sleep_duration,
+        validate_destination, validate_task_id, wait_for_queue_turn,
     };
 
     #[test]
@@ -836,6 +846,13 @@ mod tests {
     }
 
     #[test]
+    fn validates_lossless_queue_sequences() {
+        assert_eq!(parse_queue_sequence("18446744073709551615"), Ok(u64::MAX));
+        assert!(parse_queue_sequence("18446744073709551616").is_err());
+        assert!(parse_queue_sequence("1.5").is_err());
+    }
+
+    #[test]
     fn schedule_waits_recheck_long_wall_clock_deadlines() {
         assert_eq!(
             schedule_sleep_duration(1_000_000, 1),
@@ -852,10 +869,11 @@ mod tests {
     #[test]
     fn duplicate_start_cannot_claim_or_remove_the_active_registration() {
         let registry = TransferRegistry::default();
-        let ticket = registry
+        registry
             .sequential_queue
-            .register(None)
+            .register(0, None)
             .expect("queue ticket");
+        let ticket = 0;
         registry
             .transfers
             .lock()
@@ -885,8 +903,10 @@ mod tests {
     #[tokio::test]
     async fn sequential_queue_uses_registered_ticket_order() {
         let queue = std::sync::Arc::new(SequentialQueue::default());
-        let first_ticket = queue.register(None).expect("first ticket");
-        let second_ticket = queue.register(None).expect("second ticket");
+        queue.register(0, None).expect("first ticket");
+        queue.register(1, None).expect("second ticket");
+        let first_ticket = 0;
+        let second_ticket = 1;
         let second = tokio::spawn({
             let queue = queue.clone();
             async move {
@@ -911,10 +931,11 @@ mod tests {
     #[tokio::test]
     async fn a_future_ticket_does_not_block_ready_work() {
         let queue = std::sync::Arc::new(SequentialQueue::default());
-        let _future = queue
-            .register(Some(32_503_680_000_000))
+        queue
+            .register(0, Some(32_503_680_000_000))
             .expect("future ticket");
-        let ready = queue.register(None).expect("ready ticket");
+        queue.register(1, None).expect("ready ticket");
+        let ready = 1;
         queue
             .acquire(ready, &quiver_core::DownloadControl::new())
             .await
@@ -924,8 +945,9 @@ mod tests {
     #[tokio::test]
     async fn a_due_scheduled_ticket_blocks_newer_ready_work_before_preparation_finishes() {
         let queue = std::sync::Arc::new(SequentialQueue::default());
-        let _older_due = queue.register(Some(0)).expect("older due ticket");
-        let newer = queue.register(None).expect("newer ready ticket");
+        queue.register(0, Some(0)).expect("older due ticket");
+        queue.register(1, None).expect("newer ready ticket");
+        let newer = 1;
         let waiter = tokio::spawn({
             let queue = queue.clone();
             async move {

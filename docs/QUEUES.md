@@ -2,7 +2,8 @@
 
 QuiverDL can start a download immediately or at a future local date and time. The desktop converts
 that choice to a bounded UTC timestamp before it crosses the Tauri command boundary. Queue entries,
-including their enqueue and scheduled times, are written atomically before network work starts.
+including a unique FIFO sequence and their enqueue and scheduled times, are written atomically
+before network work starts.
 
 ## Queue modes
 

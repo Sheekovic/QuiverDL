@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -8,7 +11,7 @@ use tokio::{
 };
 use url::Url;
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 const MAX_DOWNLOADS: usize = 10_000;
 const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -155,6 +158,8 @@ pub(crate) struct StoredDownload {
     pub queued_at_ms: Option<String>,
     #[serde(default)]
     pub scheduled_for_ms: Option<String>,
+    #[serde(default)]
+    pub queue_sequence: Option<String>,
 }
 
 impl StoredDownload {
@@ -199,11 +204,19 @@ impl StoredDownload {
             .as_deref()
             .map(super::parse_queue_timestamp)
             .transpose()?;
+        let queue_sequence = self
+            .queue_sequence
+            .as_deref()
+            .map(super::parse_queue_sequence)
+            .transpose()?;
         if matches!(self.status.as_str(), "queued" | "scheduled") && queued_at.is_none() {
             return Err("A queued download is missing its enqueue time".into());
         }
         if self.status == "scheduled" && scheduled_for.is_none() {
             return Err("A scheduled download is missing its start time".into());
+        }
+        if matches!(self.status.as_str(), "queued" | "scheduled") && queue_sequence.is_none() {
+            return Err("A queued download is missing its FIFO sequence".into());
         }
         let downloaded = self
             .downloaded_bytes
@@ -249,13 +262,33 @@ impl AppSnapshot {
         if self.schema_version > SCHEMA_VERSION {
             return Err("This queue was created by a newer QuiverDL version".into());
         }
+        if self.schema_version < 3 {
+            let mut next_sequence = 0_u64;
+            for download in self.downloads.iter_mut().rev() {
+                if matches!(download.status.as_str(), "queued" | "scheduled")
+                    && download.queue_sequence.is_none()
+                {
+                    download.queue_sequence = Some(next_sequence.to_string());
+                    next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
+                        "The saved queue has exhausted its FIFO sequence range".to_string()
+                    })?;
+                }
+            }
+        }
         self.schema_version = SCHEMA_VERSION;
         self.settings.validate()?;
         if self.downloads.len() > MAX_DOWNLOADS {
             return Err("The saved queue is too large".into());
         }
+        let mut sequences = HashSet::new();
         for download in &self.downloads {
             download.validate()?;
+            if let Some(sequence) = download.queue_sequence.as_deref() {
+                let sequence = super::parse_queue_sequence(sequence)?;
+                if !sequences.insert(sequence) {
+                    return Err("The saved queue contains duplicate FIFO sequences".into());
+                }
+            }
         }
         Ok(())
     }
@@ -544,9 +577,44 @@ mod tests {
             error: None,
             queued_at_ms: None,
             scheduled_for_ms: None,
+            queue_sequence: None,
         };
 
         download.validate().expect("multibyte name should be valid");
+    }
+
+    #[test]
+    fn version_two_pending_items_receive_stable_fifo_sequences() {
+        let destination = if cfg!(windows) {
+            "C:/Downloads/file.bin"
+        } else {
+            "/tmp/file.bin"
+        };
+        let mut snapshot = AppSnapshot {
+            schema_version: 2,
+            settings: AppSettings::default(),
+            downloads: vec![StoredDownload {
+                id: "legacy-queued-download".into(),
+                name: "file.bin".into(),
+                url: "https://example.test/file.bin".into(),
+                destination: destination.into(),
+                status: "queued".into(),
+                downloaded_bytes: "0".into(),
+                total_bytes: None,
+                sha256: None,
+                resumed: None,
+                error: None,
+                queued_at_ms: Some("1770000000000".into()),
+                scheduled_for_ms: None,
+                queue_sequence: None,
+            }],
+        };
+
+        snapshot
+            .validate()
+            .expect("version two queue should migrate");
+        assert_eq!(snapshot.schema_version, 3);
+        assert_eq!(snapshot.downloads[0].queue_sequence.as_deref(), Some("0"));
     }
 
     #[test]
@@ -569,6 +637,7 @@ mod tests {
             error: None,
             queued_at_ms: Some("1770000000000".into()),
             scheduled_for_ms: Some("1770003600000".into()),
+            queue_sequence: Some("42".into()),
         };
 
         scheduled
@@ -577,6 +646,17 @@ mod tests {
         let mut missing_time = scheduled.clone();
         missing_time.scheduled_for_ms = None;
         assert!(missing_time.validate().is_err());
+        let mut missing_sequence = scheduled.clone();
+        missing_sequence.queue_sequence = None;
+        assert!(missing_sequence.validate().is_err());
+        let mut duplicate = scheduled.clone();
+        duplicate.id = "duplicate-sequence".into();
+        let mut snapshot = AppSnapshot {
+            schema_version: 3,
+            settings: AppSettings::default(),
+            downloads: vec![scheduled.clone(), duplicate],
+        };
+        assert!(snapshot.validate().is_err());
         let mut invalid_time = scheduled;
         invalid_time.queued_at_ms = Some("not-a-time".into());
         assert!(invalid_time.validate().is_err());

@@ -59,6 +59,7 @@ type DownloadItem = {
   recoverable?: boolean;
   queuedAtMs: string;
   scheduledForMs: string | null;
+  queueSequence: string | null;
 };
 
 type AppSettings = {
@@ -220,12 +221,16 @@ function queueStatus(item: Pick<DownloadItem, "scheduledForMs">, settings: AppSe
 }
 
 function compareQueueOrder(left: DownloadItem, right: DownloadItem) {
-  const leftTime = BigInt(left.queuedAtMs);
-  const rightTime = BigInt(right.queuedAtMs);
-  if (leftTime < rightTime) return -1;
-  if (leftTime > rightTime) return 1;
+  if (left.queueSequence !== null && right.queueSequence !== null) {
+    const leftSequence = BigInt(left.queueSequence);
+    const rightSequence = BigInt(right.queueSequence);
+    if (leftSequence < rightSequence) return -1;
+    if (leftSequence > rightSequence) return 1;
+  }
   return left.id.localeCompare(right.id);
 }
+
+const MAX_QUEUE_SEQUENCE = (1n << 64n) - 1n;
 
 function formatScheduledTime(timestamp: string) {
   return new Intl.DateTimeFormat(undefined, {
@@ -258,6 +263,7 @@ function App() {
   const recoveryQueue = useRef<DownloadItem[]>([]);
   const registeredDownloads = useRef(new Set<string>());
   const pendingCancellations = useRef(new Set<string>());
+  const nextQueueSequence = useRef(0n);
   const recoveryGate = useRef<{ promise: Promise<void>; release: () => void } | null>(null);
   if (recoveryGate.current === null) {
     let release: () => void = () => undefined;
@@ -287,6 +293,11 @@ function App() {
           totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
           recoverable: item.status === "paused",
         }));
+        nextQueueSequence.current = restored.reduce((next, item) => {
+          if (item.queueSequence === null) return next;
+          const sequence = BigInt(item.queueSequence);
+          return sequence >= next ? sequence + 1n : next;
+        }, 0n);
         recoveryQueue.current = restored
           .filter((item) => item.status === "queued" || item.status === "scheduled")
           .sort(compareQueueOrder);
@@ -339,7 +350,7 @@ function App() {
 
   useEffect(() => {
     latestSnapshot.current = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       settings,
       downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
         ...item,
@@ -577,8 +588,15 @@ function App() {
     browserRequestId?: string,
     scheduledForMs: string | null = null,
   ) {
+    await recoveryGate.current?.promise;
     const id = existingId ?? createTaskId();
     pendingCancellations.current.delete(id);
+    if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
+      setError("The durable queue sequence is exhausted; remove old entries and restart QuiverDL.");
+      return;
+    }
+    const queueSequence = nextQueueSequence.current.toString();
+    nextQueueSequence.current += 1n;
     const queuedAtMs = Date.now().toString();
     const item: DownloadItem = {
       id,
@@ -591,6 +609,7 @@ function App() {
       recoverable: false,
       queuedAtMs,
       scheduledForMs,
+      queueSequence,
     };
     setDownloads((current) =>
       existingId
@@ -605,7 +624,7 @@ function App() {
       totalBytes: storedItem.totalBytes?.toString() ?? null,
     };
     const currentSnapshot = latestSnapshot.current ?? {
-      schemaVersion: 2,
+      schemaVersion: 3,
       settings,
       downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
         ...download,
@@ -614,7 +633,7 @@ function App() {
       })),
     };
     const snapshot: AppSnapshot = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       settings,
       downloads: currentSnapshot.downloads.some((download) => download.id === item.id)
         ? currentSnapshot.downloads.map((download) =>
@@ -638,7 +657,6 @@ function App() {
       return;
     }
 
-    await recoveryGate.current?.promise;
     if (!(await registerDownload(item, settings))) return;
 
     if (browserRequestId) {
@@ -666,6 +684,7 @@ function App() {
       await invoke("register_download", {
         taskId: item.id,
         queueMode: executionSettings.queueMode,
+        queueSequence: item.queueSequence,
         scheduledForMs: item.scheduledForMs,
       });
       registeredDownloads.current.add(item.id);
