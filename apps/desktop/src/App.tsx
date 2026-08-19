@@ -3,11 +3,15 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { FormEvent, useMemo, useState } from "react";
 import "./App.css";
 
-type LinkInspection = {
+type LinkInspectionResponse = {
   effectiveUrl: string;
   totalBytes: string | null;
   supportsRanges: boolean;
   hasValidator: boolean;
+};
+
+type LinkInspection = LinkInspectionResponse & {
+  sourceUrl: string;
 };
 
 type EngineStatus = "probing" | "downloading" | "verifying" | "completed";
@@ -168,7 +172,10 @@ function App() {
     setError("");
     setInspection(null);
     try {
-      setInspection(await invoke<LinkInspection>("inspect_url", { url: submittedUrl }));
+      const result = await invoke<LinkInspectionResponse>("inspect_url", {
+        url: submittedUrl,
+      });
+      setInspection({ ...result, sourceUrl: submittedUrl });
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -187,7 +194,7 @@ function App() {
       });
       if (!destination) return;
 
-      const sourceUrl = inspection.effectiveUrl;
+      const sourceUrl = inspection.sourceUrl;
       setUrl("");
       setInspection(null);
       void runDownload(sourceUrl, destination);
