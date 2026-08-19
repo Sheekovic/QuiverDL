@@ -1,0 +1,172 @@
+# Metalink threat model and adoption decision
+
+## Status
+
+**Approved for a future, bounded HTTP-only implementation.** This evaluation does not enable
+Metalink handling in the current application. The first implementation must satisfy every gate in
+this document before RFC 5854 `.meta4` files are accepted. RFC 6249 response metadata is excluded
+from phase one and requires its own bounded-header parser proposal before it can influence a
+download.
+
+[RFC 5854](https://www.rfc-editor.org/rfc/rfc5854) defines XML metadata containing filenames,
+sizes, hashes, piece hashes, and alternate URLs. [RFC 6249](https://www.rfc-editor.org/rfc/rfc6249)
+defines related mirror and digest metadata in HTTP response headers. Both specifications require
+downloaded bytes to be checked against the described size and cryptographic hash.
+
+## Security goals
+
+- A Metalink cannot cause requests to its listed mirrors, writes, or directory creation before the
+  user sees and confirms the parsed plan. An explicitly requested metadata URL may be fetched only
+  under the bounded scheme, redirect, address-classification, DNS-binding, proxy, and cancellation
+  rules below in order to build that plan.
+- Every completed file has a declared size and a valid SHA-256 digest from the confirmed Metalink.
+- No path can escape the destination root or replace an existing file.
+- A mirror cannot make QuiverDL forward origin credentials, cookies, authorization headers, proxy
+  credentials, or private headers to another host.
+- A malformed document cannot consume unbounded CPU, memory, disk space, connections, or queue
+  entries.
+
+## Inputs and trust boundaries
+
+The Metalink document, its XML structure, extensions, text, filenames, sizes, hashes, priorities,
+locations, mirror URLs, and referenced metadata are untrusted. HTTPS authenticates the server that
+delivered a document; it does not prove that the publisher or listed files are trustworthy. A
+digest carried by the same malicious document cannot establish publisher authenticity.
+
+The user-selected destination root and an expected digest obtained independently from a trusted
+publisher are stronger trust inputs. XML signatures are outside the first implementation. If a
+document contains a signature QuiverDL cannot validate, the UI must label it **not verified** and
+must never imply authenticity from its presence.
+
+## Required parser boundary
+
+The parser must be a UI-independent Rust component with deterministic tests and fuzz coverage.
+
+- Read at most 4 MiB of Metalink XML and reject trailing data beyond that bound.
+- Parse as a stream; reject DTDs, entity declarations, external entities, XInclude, and network or
+  filesystem resolution from XML.
+- Accept only the RFC 5854 namespace and known core fields. Ignore bounded extension elements
+  without executing or dereferencing them.
+- Limit a document to 256 files and 32 HTTP(S) mirror URLs per file. Bound XML depth, text length,
+  decoded hash length, and total piece-hash entries before allocation.
+- Require exactly one non-negative size representable as `u64` and at least one correctly sized
+  SHA-256 whole-file hash for every accepted file. MD5 and SHA-1 never satisfy the integrity gate.
+- Accumulate file sizes with checked arithmetic and reject a document whose aggregate exceeds
+  `u64::MAX`. Preserve per-file and aggregate counts losslessly across Rust, IPC, persistence, and
+  UI preview boundaries.
+- Reject duplicate or contradictory size, filename, hash, and piece-set declarations rather than
+  selecting one silently.
+- Reject `metaurl`, `origin`, dynamic refresh, FTP, peer-to-peer, and unknown URL schemes in the
+  first implementation. Nested metadata is never followed automatically.
+- Do not parse or act on RFC 6249 `Link`, digest, signature, or mirror response metadata in phase
+  one. A later proposal must independently bound total header bytes and entries, define duplicate
+  and contradiction handling, require strong digest and size semantics, and add deterministic
+  malformed-header tests.
+
+## Filesystem boundary
+
+RFC 5854 allows relative directory components in a file name and explicitly forbids traversal.
+QuiverDL applies stricter platform-aware containment:
+
+- Treat every name component as untrusted. Reject empty components, `.`, `..`, absolute paths,
+  drive or UNC prefixes, NUL/control characters, `/`, `\`, `<`, `>`, `:`, `"`, `|`, `?`, `*`,
+  alternate-data-stream syntax, components ending in a dot or space, and Windows device names even
+  when followed by an extension.
+- Normalize accepted text to NFC once, reject Unicode format characters (`General_Category=Cf`),
+  including bidirectional marks, embeddings, overrides, and isolates, and use the exact normalized
+  string shown in preview for all later collision checks and filesystem creation.
+- Bound every component to at most 240 UTF-8 bytes and 240 UTF-16 code units, the relative depth to
+  32 components, and the encoded relative path to 2,048 bytes/code units before filesystem access.
+- Join only sanitized relative components beneath a destination root chosen after preview.
+- Open and retain the canonical destination-root handle, then traverse and create every component
+  relative to trusted directory handles with no-follow/reparse-point rejection. A pre-create path
+  check is not sufficient because another process can replace a directory with a symlink between
+  validation and creation. Use an equivalent atomic handle-relative mechanism on every platform.
+- Conservatively reject case-folded or Unicode-normalized path collisions on every platform before
+  starting any file. Do not infer destination filesystem semantics from the operating-system name;
+  Linux destinations can also be case-insensitive or normalization-aware.
+- Reject the batch if any normalized file path is a strict component-prefix of another file path,
+  such as `a` and `a/b`; one destination cannot simultaneously be a file and directory.
+- When a component already exists, compare stable filesystem identity obtained from the no-follow
+  handle so short-name or filesystem-specific aliases cannot make two batch paths share a target.
+- Before starting, derive every destination, partial, state, temporary, merge, and segment path for
+  the full batch. Apply every component, encoded full-path length, platform-aware normalization, and
+  alias check to each derived path in this combined namespace; reject overlong paths and every
+  destination/artifact or artifact/artifact intersection, then reserve the namespace. Use the
+  existing no-replace promotion and preserve recoverable partials after ordinary interruption.
+- Do not implement Metalink-declared symbolic links, hard links, permissions, or executable bits.
+
+## Network and integrity boundary
+
+- Fetching a remote Metalink document is an explicit user action and may retrieve only the bounded
+  metadata needed for preview. Classify its initial address and every redirect before connecting,
+  apply the same DNS-binding rules as mirror requests, and require separate approval before a public
+  metadata URL can enter a local or special-use address class.
+- The confirmation screen lists all destination-relative paths, total bytes, mirror hosts, and
+  whether publisher authenticity is unverified. Parsing and rendering this preview are strictly
+  offline: do not resolve, classify, probe, inspect, or otherwise contact a listed mirror until the
+  user confirms. Confirmation precedes every DNS lookup and every request to listed mirrors.
+- Only HTTP and HTTPS mirrors are eligible. HTTPS is preferred; use of an HTTP mirror requires the
+  same explicit insecure-transport warning used for a direct HTTP download.
+- Apply the existing retry, per-host connection, global connection, proxy, speed, cancellation, and
+  redirect-count policies independently to every mirror. Metalink support must additionally resolve
+  and classify the initial target and every redirect target before connecting; the current
+  scheme-only redirect validation is not sufficient for this feature.
+- Direct routing is the only eligible phase-one route unless a system or custom proxy can provide a
+  verifiable destination-resolution and socket-binding contract. The current delegated proxy paths
+  do not provide that evidence, so Metalink requests must fail closed with a clear error rather than
+  use the proxy or silently fall back to a direct connection.
+- A mirror confirmed as public cannot redirect to loopback, link-local, private, or otherwise local
+  addresses without a second explicit confirmation. Mixed public/private DNS answers fail closed.
+  Resolution and the actual socket destination must remain bound to the approved address class so a
+  DNS change cannot bypass the decision.
+- Every redirect remains restricted to HTTP(S), and an HTTPS-to-HTTP downgrade requires explicit
+  insecure-transport confirmation before the HTTP connection is made.
+- Phase one rejects cross-origin redirects for both metadata and mirrors. A later UI may explicitly
+  confirm a new origin before connecting, but an unseen redirect target never inherits the original
+  host's approval.
+- Never copy request credentials or private headers between mirror origins. Stored proxy
+  credentials remain inside the existing backend boundary and are not exposed to Metalink data.
+- Prevent mirror and metadata loops. Bound attempted mirrors and do not retry a failed mirror
+  indefinitely.
+- Phase one downloads a file from one mirror at a time and falls back only after a validated
+  failure. It does not combine ranges from different mirrors.
+- Check the declared size while streaming and verify SHA-256 before atomic promotion. On mismatch,
+  retain only explicitly recoverable partial state and record the failing mirror locally without
+  exposing its URL in public diagnostics.
+- Piece hashes may later support repair or cross-mirror ranges, but only SHA-256-or-stronger piece
+  sets with exact count, ordering, and length validation are eligible. A final whole-file digest
+  remains mandatory.
+
+## Availability and abuse cases
+
+A malicious publisher can list slow servers, unrelated victims, looped mirrors, enormous files, or
+many failing URLs. Preview and confirmation prevent silent requests, while document, file, mirror,
+redirect, retry, connection, and disk limits contain amplification. The application must re-check
+available space before allocation and keep all writes streaming.
+
+Private, loopback, link-local, and local-network metadata or mirror targets require an additional
+per-download confirmation because a remotely supplied URL can otherwise turn the desktop into a
+request agent for internal services. DNS results must be revalidated on every connection to limit
+rebinding.
+
+## Implementation acceptance gates
+
+- Bounded parser tests cover malformed XML, entity expansion attempts, per-file and aggregate
+  numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
+- Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
+  all Windows-invalid characters, component/path length edges, trailing-dot/space aliases,
+  alternate data streams, Unicode format/bidirectional controls, Unicode/case and file/directory
+  prefix collisions, existing short-name or filesystem aliases, adversarial
+  symlink/reparse-point swaps during creation, and destination no-replace behavior.
+- Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
+  cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
+  answers, DNS rebinding, cross-origin redirect rejection, unverifiable proxy resolution, and
+  failure without public-internet access.
+- The persistent schema records the confirmed metadata identity, selected paths, expected sizes and
+  hashes, and per-file state atomically.
+- UI review covers keyboard access, RTL layout, adaptive themes, warnings, and complete pre-network
+  consent.
+- Security review confirms that no existing HTTP download or browser-interception default changes.
+
+Only after these gates pass may the roadmap gain a separate **Metalink implementation** item.

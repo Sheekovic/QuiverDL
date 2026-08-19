@@ -45,6 +45,9 @@ See the [roadmap](ROADMAP.md), [threat model](docs/THREAT_MODEL.md), and
 or preserved for another retry. The [proxy guide](docs/PROXY.md) explains routing, authentication,
 and privacy boundaries.
 The [queue guide](docs/QUEUES.md) documents scheduling, ordering, restart recovery, and controls.
+The [distributed source evaluation](docs/DISTRIBUTED_SOURCES.md) records why bounded HTTP-only
+Metalink support may proceed later while BitTorrent remains behind separate isolation and consent
+gates.
 
 ## Get involved
 

@@ -50,7 +50,7 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 
 - [x] Proxy configuration and credential-safe proxy authentication
 - [x] Scheduled and sequential queues
-- Metalink and BitTorrent evaluation behind separate threat models
+- [x] Metalink and BitTorrent evaluation behind separate threat models
 - [x] Store packaging for browser extensions and operating-system app stores
 - Automated updater design with rollback and signature verification
 
