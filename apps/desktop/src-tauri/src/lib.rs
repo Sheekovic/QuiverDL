@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    ffi::OsString,
     path::{Component, Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant},
@@ -21,12 +22,12 @@ struct TransferRegistry {
 #[derive(Clone)]
 struct ActiveTransfer {
     control: DownloadControl,
-    destination_key: String,
+    reservation_keys: HashSet<String>,
 }
 
 struct PreparedDestination {
     path: PathBuf,
-    lock_key: String,
+    reservation_keys: HashSet<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,17 +105,21 @@ async fn start_download(
         if transfers.contains_key(&task_id) {
             return Err("A download with this identifier is already active".into());
         }
-        if transfers
-            .values()
-            .any(|transfer| transfer.destination_key == destination.lock_key)
-        {
-            return Err("Another active download is already using this destination".into());
+        if transfers.values().any(|transfer| {
+            !transfer
+                .reservation_keys
+                .is_disjoint(&destination.reservation_keys)
+        }) {
+            return Err(
+                "Another active download is already using this destination or its recovery files"
+                    .into(),
+            );
         }
         transfers.insert(
             task_id.clone(),
             ActiveTransfer {
                 control: control.clone(),
-                destination_key: destination.lock_key,
+                reservation_keys: destination.reservation_keys,
             },
         );
     }
@@ -235,7 +240,7 @@ async fn prepare_destination(destination: &str) -> Result<PreparedDestination, S
     };
 
     Ok(PreparedDestination {
-        lock_key: destination_lock_key(&path),
+        reservation_keys: destination_reservation_keys(&path),
         path,
     })
 }
@@ -261,6 +266,22 @@ fn destination_lock_key(path: &Path) -> String {
     } else {
         key
     }
+}
+
+fn destination_reservation_keys(path: &Path) -> HashSet<String> {
+    let partial = sibling_with_suffix(path, ".quiver-part");
+    let state = sibling_with_suffix(path, ".quiver.json");
+    let state_temporary = sibling_with_suffix(&state, ".tmp");
+    [path.to_path_buf(), partial, state, state_temporary]
+        .into_iter()
+        .map(|path| destination_lock_key(&path))
+        .collect()
+}
+
+fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name: OsString = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -318,7 +339,28 @@ mod tests {
         let redundant = prepare_destination(redundant.to_str().expect("UTF-8 path"))
             .await
             .expect("redundant destination");
-        assert_eq!(direct.lock_key, redundant.lock_key);
+        assert_eq!(direct.reservation_keys, redundant.reservation_keys);
+    }
+
+    #[tokio::test]
+    async fn destination_reservations_include_recovery_sidecars() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("report");
+        let sidecar_destination = directory.path().join("report.quiver-part");
+
+        let destination = prepare_destination(destination.to_str().expect("UTF-8 path"))
+            .await
+            .expect("destination");
+        let sidecar_destination =
+            prepare_destination(sidecar_destination.to_str().expect("UTF-8 path"))
+                .await
+                .expect("sidecar destination");
+
+        assert!(
+            !destination
+                .reservation_keys
+                .is_disjoint(&sidecar_destination.reservation_keys)
+        );
     }
 
     #[test]

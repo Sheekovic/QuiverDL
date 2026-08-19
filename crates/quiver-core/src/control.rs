@@ -77,6 +77,16 @@ impl DownloadControl {
             }
         }
     }
+
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            let changed = self.inner.changed.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            changed.await;
+        }
+    }
 }
 
 impl Default for DownloadControl {

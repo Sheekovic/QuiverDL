@@ -11,7 +11,13 @@ type LinkInspection = {
 };
 
 type EngineStatus = "probing" | "downloading" | "verifying" | "completed";
-type DownloadStatus = EngineStatus | "starting" | "paused" | "cancelled" | "failed";
+type DownloadStatus =
+  | EngineStatus
+  | "starting"
+  | "paused"
+  | "cancelling"
+  | "cancelled"
+  | "failed";
 
 type DownloadProgress = {
   status: EngineStatus;
@@ -46,6 +52,7 @@ const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "downloading",
   "paused",
   "verifying",
+  "cancelling",
 ]);
 
 const STATUS_LABELS: Record<DownloadStatus, string> = {
@@ -54,6 +61,7 @@ const STATUS_LABELS: Record<DownloadStatus, string> = {
   downloading: "Downloading",
   paused: "Paused",
   verifying: "Verifying",
+  cancelling: "Cancelling",
   completed: "Completed",
   cancelled: "Cancelled",
   failed: "Failed",
@@ -154,12 +162,13 @@ function App() {
 
   async function inspectLink(event: FormEvent) {
     event.preventDefault();
-    if (!url.trim()) return;
+    const submittedUrl = url.trim();
+    if (!submittedUrl) return;
     setInspecting(true);
     setError("");
     setInspection(null);
     try {
-      setInspection(await invoke<LinkInspection>("inspect_url", { url }));
+      setInspection(await invoke<LinkInspection>("inspect_url", { url: submittedUrl }));
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -207,7 +216,9 @@ function App() {
     onEvent.onmessage = (message) => {
       updateDownload(id, (current) => ({
         status:
-          current.status === "paused" || current.status === "cancelled"
+          current.status === "paused" ||
+          current.status === "cancelling" ||
+          current.status === "cancelled"
             ? current.status
             : message.status,
         downloadedBytes: BigInt(message.downloadedBytes),
@@ -230,10 +241,15 @@ function App() {
         resumed: summary.resumed,
       });
     } catch (cause) {
-      updateDownload(id, (current) => ({
-        status: current.status === "cancelled" ? "cancelled" : "failed",
-        error: String(cause),
-      }));
+      const failure = String(cause);
+      updateDownload(id, (current) => {
+        const cancelled =
+          current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
+        return {
+          status: cancelled ? "cancelled" : "failed",
+          error: cancelled ? undefined : failure,
+        };
+      });
     }
   }
 
@@ -247,7 +263,7 @@ function App() {
             ? "paused"
             : action === "resume"
               ? "downloading"
-              : "cancelled",
+              : "cancelling",
       });
     } catch (cause) {
       setError(String(cause));
@@ -304,6 +320,7 @@ function App() {
                 }}
                 placeholder="https://example.com/archive.zip"
                 autoComplete="off"
+                disabled={inspecting}
                 required
               />
               <button className="primary" type="submit" disabled={inspecting || !url.trim()}>
@@ -376,6 +393,7 @@ function DownloadRow({ item, onControl, onRemove }: { item: DownloadItem; onCont
     : null;
   const isActive = ACTIVE_STATUSES.has(item.status);
   const canPause = ["probing", "downloading"].includes(item.status);
+  const canCancel = isActive && item.status !== "cancelling";
   const hostname = (() => {
     try { return new URL(item.url).hostname; } catch { return "download"; }
   })();
@@ -404,7 +422,7 @@ function DownloadRow({ item, onControl, onRemove }: { item: DownloadItem; onCont
       <div className="row-actions">
         {canPause && <button type="button" onClick={() => onControl("pause")}>Pause</button>}
         {item.status === "paused" && <button type="button" onClick={() => onControl("resume")}>Resume</button>}
-        {isActive && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}
+        {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}
         {!isActive && <button type="button" onClick={onRemove}>Remove</button>}
       </div>
     </article>

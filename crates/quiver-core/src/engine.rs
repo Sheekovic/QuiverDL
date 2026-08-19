@@ -102,7 +102,10 @@ impl DownloadEngine {
         ensure_destination(&request.destination, request.overwrite_existing).await?;
         emit(&progress, &request, DownloadStatus::Probing, 0, None).await;
 
-        let probe = self.probe(&request.url).await?;
+        let probe = tokio::select! {
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            probe = self.probe(&request.url) => probe?,
+        };
         let partial_path = sibling_with_suffix(&request.destination, ".quiver-part");
         let state_path = sibling_with_suffix(&request.destination, ".quiver.json");
         let previous = state::load(&state_path).await?;
@@ -130,15 +133,24 @@ impl DownloadEngine {
         }
 
         control.checkpoint().await?;
-        let response = builder.send().await?;
+        let response = tokio::select! {
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            response = builder.send() => response?,
+        };
         if offset > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
             return Err(Error::InvalidResponse(
                 "server refused a validated resume request".into(),
             ));
         }
-        if offset > 0 {
-            validate_resume_range(response.headers(), offset, probe.total_bytes)?;
-        }
+        let resume_range = if offset > 0 {
+            Some(validate_resume_range(
+                response.headers(),
+                offset,
+                probe.total_bytes,
+            )?)
+        } else {
+            None
+        };
         if offset == 0 && !response.status().is_success() {
             return Err(Error::InvalidResponse(format!(
                 "download returned HTTP {}",
@@ -166,8 +178,15 @@ impl DownloadEngine {
         .await;
 
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        loop {
             control.checkpoint().await?;
+            let next = tokio::select! {
+                _ = control.cancelled() => return Err(Error::Cancelled),
+                next = stream.next() => next,
+            };
+            let Some(chunk) = next else {
+                break;
+            };
             let chunk = chunk?;
             file.write_all(&chunk).await?;
             downloaded = downloaded
@@ -185,6 +204,20 @@ impl DownloadEngine {
         file.flush().await?;
         file.sync_all().await?;
         drop(file);
+        control.checkpoint().await?;
+
+        if let Some(range) = resume_range {
+            let expected_end = range.end.checked_add(1).ok_or_else(|| {
+                Error::InvalidResponse("resume response range overflowed u64".into())
+            })?;
+            if downloaded != expected_end {
+                return Err(Error::InvalidResponse(format!(
+                    "resume response ended at byte {} but received through byte {}",
+                    range.end,
+                    downloaded.saturating_sub(1)
+                )));
+            }
+        }
 
         if let Some(total) = probe.total_bytes
             && downloaded != total
@@ -202,7 +235,7 @@ impl DownloadEngine {
             probe.total_bytes,
         )
         .await;
-        let sha256 = hash_file(&partial_path).await?;
+        let sha256 = hash_file(&partial_path, &control).await?;
         if request
             .expected_sha256
             .is_some_and(|expected| expected != sha256)
@@ -210,10 +243,13 @@ impl DownloadEngine {
             return Err(Error::ChecksumMismatch);
         }
 
-        if request.overwrite_existing && tokio::fs::try_exists(&request.destination).await? {
-            tokio::fs::remove_file(&request.destination).await?;
-        }
-        tokio::fs::rename(&partial_path, &request.destination).await?;
+        control.checkpoint().await?;
+        promote_partial(
+            &partial_path,
+            &request.destination,
+            request.overwrite_existing,
+        )
+        .await?;
         if tokio::fs::try_exists(&state_path).await? {
             tokio::fs::remove_file(state_path).await?;
         }
@@ -350,7 +386,7 @@ fn validate_resume_range(
     headers: &reqwest::header::HeaderMap,
     expected_start: u64,
     expected_total: Option<u64>,
-) -> Result<()> {
+) -> Result<ContentRange> {
     let value = headers
         .get(CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
@@ -374,7 +410,7 @@ fn validate_resume_range(
         )));
     }
 
-    Ok(())
+    Ok(value)
 }
 
 async fn file_len(path: &Path) -> Result<u64> {
@@ -385,18 +421,43 @@ async fn file_len(path: &Path) -> Result<u64> {
     }
 }
 
-async fn hash_file(path: &Path) -> Result<[u8; 32]> {
+async fn hash_file(path: &Path, control: &DownloadControl) -> Result<[u8; 32]> {
     let mut file = tokio::fs::File::open(path).await?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 128 * 1024];
     loop {
-        let count = file.read(&mut buffer).await?;
+        control.checkpoint().await?;
+        let count = tokio::select! {
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            count = file.read(&mut buffer) => count?,
+        };
         if count == 0 {
             break;
         }
         hasher.update(&buffer[..count]);
     }
     Ok(hasher.finalize().into())
+}
+
+async fn promote_partial(partial: &Path, destination: &Path, overwrite: bool) -> Result<()> {
+    if overwrite {
+        if tokio::fs::try_exists(destination).await? {
+            tokio::fs::remove_file(destination).await?;
+        }
+        tokio::fs::rename(partial, destination).await?;
+        return Ok(());
+    }
+
+    match tokio::fs::hard_link(partial, destination).await {
+        Ok(()) => {
+            tokio::fs::remove_file(partial).await?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(Error::DestinationExists(destination.to_path_buf()))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 #[cfg(test)]
@@ -408,7 +469,7 @@ mod tests {
     use super::{
         ContentRange, ProbeResult, can_resume, parse_content_range, parse_content_range_total,
     };
-    use crate::{DownloadRequest, state::PartialState};
+    use crate::{DownloadRequest, Error, state::PartialState};
 
     #[test]
     fn parses_content_range_total() {
@@ -460,5 +521,35 @@ mod tests {
             ..probe
         };
         assert!(!can_resume(&request, &changed, Some(&state), 50));
+    }
+
+    #[tokio::test]
+    async fn no_clobber_promotion_preserves_a_racing_destination() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let partial = directory.path().join("archive.quiver-part");
+        let destination = directory.path().join("archive");
+        tokio::fs::write(&partial, b"new")
+            .await
+            .expect("partial should write");
+        tokio::fs::write(&destination, b"existing")
+            .await
+            .expect("destination should write");
+
+        let error = super::promote_partial(&partial, &destination, false)
+            .await
+            .expect_err("an existing destination must not be replaced");
+        assert!(matches!(error, Error::DestinationExists(path) if path == destination));
+        assert_eq!(
+            tokio::fs::read(&destination)
+                .await
+                .expect("destination should remain readable"),
+            b"existing"
+        );
+        assert_eq!(
+            tokio::fs::read(&partial)
+                .await
+                .expect("partial should remain recoverable"),
+            b"new"
+        );
     }
 }
