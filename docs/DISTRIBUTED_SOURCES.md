@@ -6,9 +6,9 @@ network policy, and security review.
 
 | Area | Metalink | BitTorrent |
 | --- | --- | --- |
-| Primary input | RFC 5854 XML or RFC 6249 HTTP metadata | `.torrent` metainfo or a magnet URI |
+| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | `.torrent` metainfo or a magnet URI |
 | Network model | Known HTTP(S) mirrors | Trackers and many untrusted peers over additional protocols |
-| Integrity | Publisher-provided size and SHA-256 | Per-piece hashes rooted in torrent metainfo |
+| Integrity | Publisher-provided size and SHA-256 | V2 SHA-256 Merkle data; v1-only is inspector-only |
 | Privacy change | Mirror operators learn requests | Trackers and peers can learn the user's IP address and swarm identifier |
 | QuiverDL decision | Approved for a bounded HTTP-only implementation | Deferred until the isolation and consent gates below are met |
 

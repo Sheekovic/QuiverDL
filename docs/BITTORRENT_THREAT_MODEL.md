@@ -61,14 +61,16 @@ peers, or addresses aimed at local services.
 ## Content integrity
 
 V1 torrents use SHA-1 piece hashes. Those hashes detect ordinary corruption but are not publisher
-authentication and do not meet QuiverDL's strong-digest policy on their own. V2 uses SHA-256 Merkle
-roots and is preferred; hybrid torrents must validate both representations and reject disagreement.
+authentication and do not meet QuiverDL's strong-digest policy. A v1-only input may be parsed by the
+offline inspector but cannot start discovery, allocate content, or download. The first eligible
+networked backend requires v2 or a hybrid torrent with a valid v2 SHA-256 representation; hybrid
+torrents must validate both representations and reject disagreement.
 
-Every piece must be verified before it becomes eligible for upload or final assembly. Failed piece
-bytes are discarded, peers repeatedly supplying bad data are bounded and evicted, and completed
-files still use no-replace promotion. If a trusted independent whole-file SHA-256 is available,
-QuiverDL verifies it before completion. The UI must distinguish **piece-verified** from
-**publisher-authenticated**.
+Every v2 piece must be verified against its SHA-256 Merkle data before it becomes eligible for
+upload or final assembly. Failed piece bytes are discarded, peers repeatedly supplying bad data are
+bounded and evicted, and completed files still use no-replace promotion. If a trusted independent
+whole-file SHA-256 is available, QuiverDL also verifies it before completion. The UI must
+distinguish **piece-verified** from **publisher-authenticated**.
 
 ## Network, privacy, and consent requirements
 

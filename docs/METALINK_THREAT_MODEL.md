@@ -4,7 +4,9 @@
 
 **Approved for a future, bounded HTTP-only implementation.** This evaluation does not enable
 Metalink handling in the current application. The first implementation must satisfy every gate in
-this document before `.meta4` files or Metalink response metadata are accepted.
+this document before RFC 5854 `.meta4` files are accepted. RFC 6249 response metadata is excluded
+from phase one and requires its own bounded-header parser proposal before it can influence a
+download.
 
 [RFC 5854](https://www.rfc-editor.org/rfc/rfc5854) defines XML metadata containing filenames,
 sizes, hashes, piece hashes, and alternate URLs. [RFC 6249](https://www.rfc-editor.org/rfc/rfc6249)
@@ -53,6 +55,10 @@ The parser must be a UI-independent Rust component with deterministic tests and 
   selecting one silently.
 - Reject `metaurl`, `origin`, dynamic refresh, FTP, peer-to-peer, and unknown URL schemes in the
   first implementation. Nested metadata is never followed automatically.
+- Do not parse or act on RFC 6249 `Link`, digest, signature, or mirror response metadata in phase
+  one. A later proposal must independently bound total header bytes and entries, define duplicate
+  and contradiction handling, require strong digest and size semantics, and add deterministic
+  malformed-header tests.
 
 ## Filesystem boundary
 
@@ -86,6 +92,10 @@ QuiverDL applies stricter platform-aware containment:
   redirect-count policies independently to every mirror. Metalink support must additionally resolve
   and classify the initial target and every redirect target before connecting; the current
   scheme-only redirect validation is not sufficient for this feature.
+- Direct routing is the only eligible phase-one route unless a system or custom proxy can provide a
+  verifiable destination-resolution and socket-binding contract. The current delegated proxy paths
+  do not provide that evidence, so Metalink requests must fail closed with a clear error rather than
+  use the proxy or silently fall back to a direct connection.
 - A mirror confirmed as public cannot redirect to loopback, link-local, private, or otherwise local
   addresses without a second explicit confirmation. Mixed public/private DNS answers fail closed.
   Resolution and the actual socket destination must remain bound to the approved address class so a
@@ -123,7 +133,7 @@ rebinding.
   Unicode/case collisions, symlink races, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
-  answers, DNS rebinding, and failure without public-internet access.
+  answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.
 - The persistent schema records the confirmed metadata identity, selected paths, expected sizes and
   hashes, and per-file state atomically.
 - UI review covers keyboard access, RTL layout, adaptive themes, warnings, and complete pre-network
