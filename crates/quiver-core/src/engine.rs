@@ -30,6 +30,7 @@ use crate::{
 };
 
 const USER_AGENT: &str = concat!("QuiverDL/", env!("CARGO_PKG_VERSION"));
+const MAX_SEGMENTS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeResult {
@@ -179,59 +180,72 @@ impl DownloadEngine {
             offset = 0;
         }
 
+        let transfer_policy = request.transfer_policy.normalized();
+        let ranges = if offset == 0
+            && let Some(total) = probe.total_bytes
+            && probe.supports_ranges
+            && resume_validator(&probe).is_some()
+        {
+            plan_segments(
+                total,
+                transfer_policy.max_segments,
+                transfer_policy.min_segment_bytes,
+            )
+        } else {
+            Vec::new()
+        };
+        let segment_ranges: Vec<[u64; 2]> = ranges
+            .iter()
+            .map(|range| [range.start, range.end])
+            .collect();
+        let can_resume_segments = ranges.len() > 1
+            && validators_match(&request, &probe, previous.as_ref())
+            && previous
+                .as_ref()
+                .is_some_and(|state| state.segment_ranges == segment_ranges);
         let partial_state = PartialState {
             url: request.url.to_string(),
             total_bytes: probe.total_bytes,
             etag: probe.etag.clone(),
             last_modified: probe.last_modified.clone(),
+            segment_ranges,
         };
         state::save(&state_path, &partial_state).await?;
-        let transfer_policy = request.transfer_policy.normalized();
         let download_limiter = transfer_policy
             .per_download_speed_limit_bps
             .and_then(BandwidthLimiter::new);
 
-        if offset == 0
-            && let Some(total) = probe.total_bytes
-            && probe.supports_ranges
-            && (probe.etag.is_some() || probe.last_modified.is_some())
-        {
-            let ranges = plan_segments(
-                total,
-                transfer_policy.max_segments,
-                transfer_policy.min_segment_bytes,
-            );
-            if ranges.len() > 1 {
-                let downloaded = self
-                    .download_segmented(
-                        &request,
-                        &probe,
-                        &partial_path,
-                        &control,
-                        &progress,
-                        &ranges,
-                        download_limiter.as_ref(),
-                        transfer_policy.max_connections_per_host,
-                    )
-                    .await?;
-                return finish_download(
+        if ranges.len() > 1 {
+            let (downloaded, resumed) = self
+                .download_segmented(
                     &request,
+                    &probe,
+                    &partial_path,
                     &control,
                     &progress,
-                    &partial_path,
-                    &state_path,
-                    downloaded,
-                    probe.total_bytes,
-                    false,
+                    &ranges,
+                    can_resume_segments,
+                    download_limiter.as_ref(),
+                    transfer_policy.max_connections_per_host,
                 )
-                .await;
-            }
+                .await?;
+            return finish_download(
+                &request,
+                &control,
+                &progress,
+                &partial_path,
+                &state_path,
+                downloaded,
+                probe.total_bytes,
+                resumed,
+            )
+            .await;
         }
 
         let mut builder = self.client.get(probe.effective_url.clone());
         if offset > 0 {
             builder = builder.header(RANGE, format!("bytes={offset}-"));
-            if let Some(validator) = probe.etag.as_ref().or(probe.last_modified.as_ref()) {
+            if let Some(validator) = resume_validator(&probe) {
                 builder = builder.header(IF_RANGE, validator);
             }
         }
@@ -369,18 +383,43 @@ impl DownloadEngine {
         control: &DownloadControl,
         progress: &mpsc::Sender<ProgressEvent>,
         ranges: &[ByteRange],
+        can_resume_segments: bool,
         download_limiter: Option<&BandwidthLimiter>,
         max_connections_per_host: u8,
-    ) -> Result<u64> {
+    ) -> Result<(u64, bool)> {
         let segment_paths: Vec<PathBuf> = (0..ranges.len())
             .map(|index| sibling_with_suffix(partial_path, &format!(".segment-{index}")))
             .collect();
-        let downloaded = Arc::new(AtomicU64::new(0));
+        let mut existing_lengths = Vec::with_capacity(ranges.len());
+        for (path, range) in segment_paths.iter().zip(ranges) {
+            let expected = range.end - range.start + 1;
+            let length = if can_resume_segments {
+                file_len(path).await?
+            } else {
+                if tokio::fs::try_exists(path).await? {
+                    tokio::fs::remove_file(path).await?;
+                }
+                0
+            };
+            if length > expected {
+                tokio::fs::remove_file(path).await?;
+                existing_lengths.push(0);
+            } else {
+                existing_lengths.push(length);
+            }
+        }
+        let initial_downloaded = existing_lengths.iter().try_fold(0_u64, |total, length| {
+            total
+                .checked_add(*length)
+                .ok_or_else(|| Error::InvalidResponse("segment size overflowed u64".into()))
+        })?;
+        let resumed = initial_downloaded > 0;
+        let downloaded = Arc::new(AtomicU64::new(initial_downloaded));
         emit(
             progress,
             request,
             DownloadStatus::Downloading,
-            0,
+            initial_downloaded,
             probe.total_bytes,
         );
 
@@ -388,12 +427,13 @@ impl DownloadEngine {
             download_segment(
                 self.client.clone(),
                 probe.effective_url.clone(),
-                probe.etag.clone().or_else(|| probe.last_modified.clone()),
+                resume_validator(probe).map(ToOwned::to_owned),
                 probe
                     .total_bytes
                     .expect("segmented downloads have a known size"),
                 range,
                 segment_paths[index].clone(),
+                existing_lengths[index],
                 control.clone(),
                 request.clone(),
                 progress.clone(),
@@ -437,12 +477,14 @@ impl DownloadEngine {
         }
         .await;
 
-        for path in segment_paths {
-            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                let _ = tokio::fs::remove_file(path).await;
+        if transfer_result.is_ok() {
+            for path in segment_paths {
+                if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
             }
         }
-        transfer_result
+        transfer_result.map(|downloaded| (downloaded, resumed))
     }
 }
 
@@ -484,6 +526,7 @@ async fn download_segment(
     total: u64,
     range: ByteRange,
     path: PathBuf,
+    existing_bytes: u64,
     control: DownloadControl,
     request: DownloadRequest,
     progress: mpsc::Sender<ProgressEvent>,
@@ -493,6 +536,14 @@ async fn download_segment(
     host_policy: HostConnectionPolicy,
     max_connections_per_host: u8,
 ) -> Result<()> {
+    let expected = range.end - range.start + 1;
+    if existing_bytes == expected {
+        return Ok(());
+    }
+    let request_start = range
+        .start
+        .checked_add(existing_bytes)
+        .ok_or_else(|| Error::InvalidResponse("segment range overflowed u64".into()))?;
     control.checkpoint().await?;
     let _host_permit = tokio::select! {
         _ = control.cancelled() => return Err(Error::Cancelled),
@@ -500,7 +551,7 @@ async fn download_segment(
     };
     let mut builder = client
         .get(url)
-        .header(RANGE, format!("bytes={}-{}", range.start, range.end));
+        .header(RANGE, format!("bytes={request_start}-{}", range.end));
     if let Some(validator) = validator {
         builder = builder.header(IF_RANGE, validator);
     }
@@ -509,10 +560,14 @@ async fn download_segment(
         response = builder.send() => response?,
     };
     if response.status() != StatusCode::PARTIAL_CONTENT {
-        return Err(Error::InvalidResponse(format!(
-            "segment request returned HTTP {}",
-            response.status()
-        )));
+        return Err(if response.status().is_success() {
+            Error::InvalidResponse(format!(
+                "segment request returned unexpected HTTP {}",
+                response.status()
+            ))
+        } else {
+            status_error("segment download", response.status())
+        });
     }
     let actual = response
         .headers()
@@ -522,20 +577,20 @@ async fn download_segment(
         .ok_or_else(|| {
             Error::InvalidResponse("segment response has no valid Content-Range".into())
         })?;
-    if actual.start != range.start || actual.end != range.end || actual.total != Some(total) {
+    if actual.start != request_start || actual.end != range.end || actual.total != Some(total) {
         return Err(Error::InvalidResponse(format!(
             "segment response range {}-{} did not match requested range {}-{}",
-            actual.start, actual.end, range.start, range.end
+            actual.start, actual.end, request_start, range.end
         )));
     }
 
     let mut output = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
-        .truncate(true)
+        .append(true)
         .open(path)
         .await?;
-    let mut segment_bytes = 0_u64;
+    let mut segment_bytes = existing_bytes;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = tokio::select! {
         _ = control.cancelled() => return Err(Error::Cancelled),
@@ -566,7 +621,6 @@ async fn download_segment(
     }
     output.flush().await?;
     output.sync_all().await?;
-    let expected = range.end - range.start + 1;
     if segment_bytes != expected {
         return Err(Error::InvalidResponse(format!(
             "segment contained {segment_bytes} bytes instead of {expected}"
@@ -620,6 +674,7 @@ async fn finish_download(
         return Err(Error::ChecksumMismatch);
     }
 
+    remove_segment_files(partial_path).await?;
     control.checkpoint().await?;
     promote_partial(
         partial_path,
@@ -683,22 +738,54 @@ fn can_resume(
     offset: u64,
 ) -> bool {
     let Some(state) = state else { return false };
-    if state.url != request.url.as_str() || !probe.supports_ranges {
+    if !validators_match(request, probe, Some(state)) {
         return false;
     }
-    if probe.total_bytes.is_some_and(|total| offset >= total)
+    if probe.total_bytes.is_some_and(|total| offset >= total) {
+        return false;
+    }
+
+    true
+}
+
+fn validators_match(
+    request: &DownloadRequest,
+    probe: &ProbeResult,
+    state: Option<&PartialState>,
+) -> bool {
+    let Some(state) = state else { return false };
+    if state.url != request.url.as_str()
+        || !probe.supports_ranges
         || state.total_bytes != probe.total_bytes
     {
         return false;
     }
 
-    match (&state.etag, &probe.etag) {
-        (Some(old), Some(current)) => old == current,
-        _ => matches!(
-            (&state.last_modified, &probe.last_modified),
-            (Some(old), Some(current)) if old == current
-        ),
+    match resume_validator(probe) {
+        Some(current) if probe.etag.as_deref() == Some(current) => {
+            state.etag.as_deref() == Some(current)
+        }
+        Some(current) => state.last_modified.as_deref() == Some(current),
+        None => false,
     }
+}
+
+fn resume_validator(probe: &ProbeResult) -> Option<&str> {
+    probe
+        .etag
+        .as_deref()
+        .filter(|etag| !etag.trim_start().starts_with("W/"))
+        .or(probe.last_modified.as_deref())
+}
+
+async fn remove_segment_files(partial_path: &Path) -> Result<()> {
+    for index in 0..MAX_SEGMENTS {
+        let path = sibling_with_suffix(partial_path, &format!(".segment-{index}"));
+        if tokio::fs::try_exists(&path).await? {
+            tokio::fs::remove_file(path).await?;
+        }
+    }
+    Ok(())
 }
 
 fn emit(
@@ -920,15 +1007,26 @@ fn atomic_rename_noreplace(partial: &Path, destination: &Path) -> std::io::Resul
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        path::Path,
+        sync::{Arc, atomic::AtomicU64},
+    };
 
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+        sync::mpsc,
+    };
     use url::Url;
 
     use super::{
-        ByteRange, ContentRange, ProbeResult, can_resume, parse_content_range,
-        parse_content_range_total, plan_segments,
+        ByteRange, ContentRange, ProbeResult, can_resume, download_segment, parse_content_range,
+        parse_content_range_total, plan_segments, status_error,
     };
-    use crate::{DownloadRequest, Error, state::PartialState};
+    use crate::{
+        DownloadControl, DownloadRequest, Error, HostConnectionPolicy, ProgressEvent,
+        state::PartialState,
+    };
 
     #[test]
     fn parses_content_range_total() {
@@ -987,6 +1085,7 @@ mod tests {
             total_bytes: Some(100),
             etag: Some("v1".into()),
             last_modified: None,
+            segment_ranges: Vec::new(),
         };
 
         assert!(can_resume(&request, &probe, Some(&state), 50));
@@ -994,9 +1093,101 @@ mod tests {
 
         let changed = ProbeResult {
             etag: Some("v2".into()),
-            ..probe
+            ..probe.clone()
         };
         assert!(!can_resume(&request, &changed, Some(&state), 50));
+
+        let weak_etag = ProbeResult {
+            etag: Some("W/\"v1\"".into()),
+            last_modified: None,
+            ..probe.clone()
+        };
+        assert!(!can_resume(&request, &weak_etag, Some(&state), 50));
+
+        let weak_with_date = ProbeResult {
+            last_modified: Some("Wed, 19 Aug 2026 01:02:03 GMT".into()),
+            ..weak_etag
+        };
+        let dated_state = PartialState {
+            last_modified: weak_with_date.last_modified.clone(),
+            ..state
+        };
+        assert!(can_resume(
+            &request,
+            &weak_with_date,
+            Some(&dated_state),
+            50
+        ));
+    }
+
+    #[tokio::test]
+    async fn resumes_a_segment_from_its_validated_prefix() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fixture server should bind");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            assert!(request.contains("range: bytes=4-9"));
+            assert!(request.contains("if-range: segment-v1"));
+            socket
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Length: 6\r\nContent-Range: bytes 4-9/10\r\nConnection: close\r\n\r\nefghij",
+                )
+                .await
+                .expect("response should write");
+        });
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("segment");
+        tokio::fs::write(&path, b"abcd")
+            .await
+            .expect("segment prefix should write");
+        let url = Url::parse(&format!("http://{address}/file")).expect("fixture URL");
+        let request = DownloadRequest::new(url.clone(), directory.path().join("file"));
+        let (progress, receiver) = mpsc::channel::<ProgressEvent>(8);
+        drop(receiver);
+
+        download_segment(
+            reqwest::Client::new(),
+            url,
+            Some("segment-v1".into()),
+            10,
+            ByteRange { start: 0, end: 9 },
+            path.clone(),
+            4,
+            DownloadControl::new(),
+            request,
+            progress,
+            Arc::new(AtomicU64::new(4)),
+            None,
+            None,
+            HostConnectionPolicy::default(),
+            1,
+        )
+        .await
+        .expect("remaining segment bytes should download");
+        assert_eq!(
+            tokio::fs::read(path).await.expect("segment should read"),
+            b"abcdefghij"
+        );
+        server.await.expect("fixture server should finish");
+    }
+
+    #[test]
+    fn transient_segment_statuses_are_retryable() {
+        for status in [
+            reqwest::StatusCode::REQUEST_TIMEOUT,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(status_error("segment download", status).is_retryable());
+        }
     }
 
     #[test]

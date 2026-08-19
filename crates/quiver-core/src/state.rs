@@ -14,6 +14,8 @@ pub(crate) struct PartialState {
     pub total_bytes: Option<u64>,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    #[serde(default)]
+    pub segment_ranges: Vec<[u64; 2]>,
 }
 
 pub(crate) fn sibling_with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -99,6 +101,7 @@ mod tests {
             total_bytes: Some(42),
             etag: Some("fixture".into()),
             last_modified: None,
+            segment_ranges: vec![[0, 20], [21, 41]],
         };
 
         save(&path, &expected).await.expect("state should save");
@@ -109,5 +112,6 @@ mod tests {
         assert_eq!(actual.url, expected.url);
         assert_eq!(actual.total_bytes, expected.total_bytes);
         assert_eq!(actual.etag, expected.etag);
+        assert_eq!(actual.segment_ranges, expected.segment_ranges);
     }
 }
