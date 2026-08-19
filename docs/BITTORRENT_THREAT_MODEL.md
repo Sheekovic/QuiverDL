@@ -78,10 +78,12 @@ peers, or addresses aimed at local services.
   parameters, a decoded key above 64 bytes, or a decoded value above 4 KiB. Accept at most eight
   exact-topic values, 32 tracker values, and 32 web-seed values; reject malformed percent encoding,
   invalid UTF-8 text fields, and duplicate key/value pairs. Perform checked decoding into bounded
-  buffers and add deterministic boundary tests. Because the private flag is unavailable before
-  metadata retrieval, DHT, peer exchange, or public tracker discovery could disclose a private
-  torrent too early. Magnet networking requires a later, separate threat model; private magnets
-  remain unsupported until privacy can be established before discovery.
+  buffers and add deterministic boundary tests. The offline preview never renders or copies the raw
+  magnet URI or full tracker/web-seed values; it shows those endpoints only as sanitized scheme,
+  host, and non-default port, with userinfo, path, query, and fragment removed. Because the private
+  flag is unavailable before metadata retrieval, DHT, peer exchange, or public tracker discovery
+  could disclose a private torrent too early. Magnet networking requires a later, separate threat
+  model; private magnets remain unsupported until privacy can be established before discovery.
 - Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
   accounted for and removed safely.
 
