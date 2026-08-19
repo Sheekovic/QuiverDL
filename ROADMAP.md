@@ -1,56 +1,59 @@
 # QuiverDL Roadmap
 
-This roadmap communicates direction rather than fixed deadlines. Priorities may change as testing
-and contributor feedback reveal better solutions.
+This roadmap communicates direction rather than fixed deadlines. Priorities may change as testing and contributor feedback reveal better solutions.
 
-## Foundation — in progress
+## Foundation
 
 - [x] Native Rust HTTP and HTTPS transfer engine
 - [x] Partial-file staging and validator-gated resume decisions
-- [x] Validate the returned `Content-Range` start before appending resumed bytes
+- [x] Validate returned `Content-Range` values before appending resumed bytes
 - [x] Pause, cancel, progress, and SHA-256 primitives
-- [x] Tauri and React desktop foundation
+- [x] Tauri and React desktop application
 - [x] Local HTTP integration testing
-- [ ] Persistent queue and restart recovery
-- [x] Wire real transfers into the desktop interface
-- [ ] Retry policy with backoff and clear failure states
-- [ ] Filename discovery from URL and `Content-Disposition`
+- [x] Persistent queue and restart recovery
+- [x] Retry policy with bounded exponential backoff and clear failure states
+- [x] Filename discovery from URL and `Content-Disposition`
 
 ## Fast transfers
 
-- [ ] Bounded multi-segment downloads
-- [ ] Per-host connection policy
-- [ ] Dynamic segment sizing and merge verification
-- [ ] Global and per-download speed limits
-- [ ] Benchmarks for throughput, CPU, memory, and disk behavior
+- [x] Bounded multi-segment downloads
+- [x] Shared per-host connection policy
+- [x] Adaptive segment sizing and merge verification
+- [x] Global and per-download speed limits
+- [x] Reproducible throughput, CPU, memory, and disk benchmark procedure
 
 ## Desktop experience
 
 - [x] Adaptive light and dark themes
 - [x] Accessible keyboard-first queue controls
 - [x] Destination picker and collision handling
-- [ ] Notifications and system-tray behavior
-- [ ] Settings persistence
-- [ ] Localization foundation
+- [x] Completion notifications and system tray
+- [x] Atomic settings persistence
+- [x] English/Arabic localization foundation with RTL direction support
 
 ## Browser integration
 
-- [ ] Authenticated native-messaging bridge
-- [ ] Chromium and Firefox extension foundation
-- [ ] Explicit, privacy-preserving download interception rules
-- [ ] Browser-to-desktop integration tests
+- [x] Authenticated native-messaging bridge
+- [x] Chromium and Firefox extension foundations
+- [x] Explicit, privacy-preserving interception rules that are disabled by default
+- [x] Native framing, authentication, inbox-contract, and extension syntax tests
 
 ## Release readiness
 
-- [ ] Signed Windows installer and portable build
-- [ ] Linux packages
-- [ ] macOS application and signing plan
-- [ ] Reproducible GitHub release automation
-- [ ] Threat model and security review
+- [ ] Publish a signed Windows installer and portable archive (automation is complete; repository-owner certificate credentials are required)
+- [x] Linux DEB, RPM, and AppImage automation
+- [x] macOS Intel/Apple Silicon app, signing, and notarization plan
+- [x] Draft GitHub release automation with checksummed artifacts
+- [x] Threat model and security review checklist
+
+## Next cycle
+
+- Proxy configuration and credential-safe proxy authentication
+- Scheduled and sequential queues
+- Metalink and BitTorrent evaluation behind separate threat models
+- Store packaging for browser extensions and operating-system app stores
+- Automated updater design with rollback and signature verification
 
 ## Good first contributions
 
-Beginner-friendly work should be small, testable, and avoid changing core safety behavior without
-review. Good candidates include documentation examples, deterministic parsing tests, accessible UI
-labels, theme tokens, and local test-server improvements. Look for the
-[`good first issue`](https://github.com/Sheekovic/QuiverDL/labels/good%20first%20issue) label.
+Beginner-friendly work should be small, testable, and avoid changing core safety behavior without review. Good candidates include documentation examples, deterministic parsing tests, accessible UI labels, additional translations, theme tokens, and local test-server improvements. Look for the [`good first issue`](https://github.com/Sheekovic/QuiverDL/labels/good%20first%20issue) label.

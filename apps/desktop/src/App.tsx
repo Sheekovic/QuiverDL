@@ -1,20 +1,27 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { FormEvent, useMemo, useState } from "react";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import { MessageKey, translate } from "./i18n";
 
 type LinkInspectionResponse = {
   effectiveUrl: string;
   totalBytes: string | null;
   supportsRanges: boolean;
   hasValidator: boolean;
+  suggestedFilename: string;
 };
 
 type LinkInspection = LinkInspectionResponse & {
   sourceUrl: string;
 };
 
-type EngineStatus = "probing" | "downloading" | "verifying" | "completed";
+type EngineStatus = "probing" | "retrying" | "downloading" | "verifying" | "completed";
 type DownloadStatus =
   | EngineStatus
   | "starting"
@@ -46,6 +53,44 @@ type DownloadItem = {
   sha256?: string;
   resumed?: boolean;
   error?: string;
+  recoverable?: boolean;
+};
+
+type AppSettings = {
+  theme: "system" | "light" | "dark";
+  language: "en" | "ar";
+  notifications: boolean;
+  retryAttempts: number;
+  retryInitialDelayMs: number;
+  retryMaxDelayMs: number;
+  maxSegments: number;
+  maxConnectionsPerHost: number;
+  perDownloadSpeedLimitBps: number | null;
+  globalSpeedLimitBps: number | null;
+};
+
+type StoredDownload = Omit<DownloadItem, "downloadedBytes" | "totalBytes" | "recoverable"> & {
+  downloadedBytes: string;
+  totalBytes: string | null;
+};
+
+type AppSnapshot = {
+  schemaVersion: number;
+  settings: AppSettings;
+  downloads: StoredDownload[];
+};
+
+type BrowserRequest = {
+  version: number;
+  id: string;
+  url: string;
+  suggestedFilename: string | null;
+};
+
+type BrowserBridgeInfo = {
+  hostName: string;
+  token: string;
+  configPath: string;
 };
 
 type Filter = "all" | "active" | "completed" | "failed";
@@ -53,6 +98,7 @@ type Filter = "all" | "active" | "completed" | "failed";
 const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "starting",
   "probing",
+  "retrying",
   "downloading",
   "paused",
   "verifying",
@@ -62,6 +108,7 @@ const ACTIVE_STATUSES = new Set<DownloadStatus>([
 const STATUS_LABELS: Record<DownloadStatus, string> = {
   starting: "Starting",
   probing: "Inspecting server",
+  retrying: "Retrying",
   downloading: "Downloading",
   paused: "Paused",
   verifying: "Verifying",
@@ -69,6 +116,19 @@ const STATUS_LABELS: Record<DownloadStatus, string> = {
   completed: "Completed",
   cancelled: "Cancelled",
   failed: "Failed",
+};
+
+const DEFAULT_SETTINGS: AppSettings = {
+  theme: "system",
+  language: "en",
+  notifications: true,
+  retryAttempts: 3,
+  retryInitialDelayMs: 750,
+  retryMaxDelayMs: 15_000,
+  maxSegments: 4,
+  maxConnectionsPerHost: 8,
+  perDownloadSpeedLimitBps: null,
+  globalSpeedLimitBps: null,
 };
 
 const FILTER_LABELS: Record<Exclude<Filter, "all">, string> = {
@@ -127,6 +187,76 @@ function App() {
   const [error, setError] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [choosingDestination, setChoosingDestination] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
+  const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
+  const stateLoaded = useRef(false);
+  const t = (key: MessageKey) => translate(settings.language, key);
+
+  useEffect(() => {
+    let active = true;
+    void invoke<AppSnapshot>("load_app_state")
+      .then((snapshot) => {
+        if (!active) return;
+        setSettings(snapshot.settings);
+        setDownloads(
+          snapshot.downloads.map((item) => ({
+            ...item,
+            downloadedBytes: BigInt(item.downloadedBytes),
+            totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
+            recoverable: item.status === "paused",
+          })),
+        );
+        stateLoaded.current = true;
+      })
+      .catch((cause) => {
+        if (active) setError(String(cause));
+        stateLoaded.current = true;
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void invoke<BrowserRequest[]>("list_browser_requests")
+        .then((requests) => {
+          if (active) setBrowserRequests(requests);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 3_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!stateLoaded.current) return;
+    const timeout = window.setTimeout(() => {
+      const snapshot: AppSnapshot = {
+        schemaVersion: 1,
+        settings,
+        downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
+          ...item,
+          downloadedBytes: item.downloadedBytes.toString(),
+          totalBytes: item.totalBytes?.toString() ?? null,
+        })),
+      };
+      void invoke("save_app_state", { snapshot }).catch((cause) => setError(String(cause)));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [downloads, settings]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme;
+    document.documentElement.lang = settings.language;
+    document.documentElement.dir = settings.language === "ar" ? "rtl" : "ltr";
+  }, [settings.language, settings.theme]);
 
   const counts = useMemo(
     () => ({
@@ -190,7 +320,7 @@ function App() {
     try {
       const destination = await save({
         title: "Save download as",
-        defaultPath: filenameFromUrl(inspection.effectiveUrl),
+        defaultPath: inspection.suggestedFilename || filenameFromUrl(inspection.effectiveUrl),
       });
       if (!destination) return;
 
@@ -205,8 +335,8 @@ function App() {
     }
   }
 
-  async function runDownload(sourceUrl: string, destination: string) {
-    const id = createTaskId();
+  async function runDownload(sourceUrl: string, destination: string, existingId?: string) {
+    const id = existingId ?? createTaskId();
     const item: DownloadItem = {
       id,
       name: destinationName(destination),
@@ -215,8 +345,13 @@ function App() {
       status: "starting",
       downloadedBytes: 0n,
       totalBytes: null,
+      recoverable: false,
     };
-    setDownloads((current) => [item, ...current]);
+    setDownloads((current) =>
+      existingId
+        ? current.map((existing) => (existing.id === existingId ? item : existing))
+        : [item, ...current],
+    );
     setFilter("all");
 
     const onEvent = new Channel<DownloadProgress>();
@@ -238,6 +373,7 @@ function App() {
         taskId: id,
         url: sourceUrl,
         destination,
+        settings,
         onEvent,
       });
       updateDownload(id, {
@@ -247,6 +383,9 @@ function App() {
         sha256: summary.sha256,
         resumed: summary.resumed,
       });
+      if (settings.notifications) {
+        void notifyCompleted(destinationName(destination));
+      }
     } catch (cause) {
       const failure = String(cause);
       updateDownload(id, (current) => {
@@ -257,6 +396,26 @@ function App() {
           error: cancelled ? undefined : failure,
         };
       });
+    }
+  }
+
+  function retryDownload(item: DownloadItem) {
+    void runDownload(item.url, item.destination, item.id);
+  }
+
+  async function reviewBrowserRequest(request: BrowserRequest) {
+    setUrl(request.url);
+    setInspection(null);
+    setFilter("all");
+    await invoke("acknowledge_browser_request", { id: request.id });
+    setBrowserRequests((current) => current.filter((item) => item.id !== request.id));
+  }
+
+  async function revealBrowserBridge() {
+    try {
+      setBridgeInfo(await invoke<BrowserBridgeInfo>("get_browser_bridge_info"));
+    } catch (cause) {
+      setError(String(cause));
     }
   }
 
@@ -289,33 +448,87 @@ function App() {
           <span>QuiverDL</span>
         </div>
         <nav aria-label="Download filters">
-          <FilterButton active={filter === "all"} count={downloads.length} label="Downloads" onClick={() => setFilter("all")} />
-          <FilterButton active={filter === "active"} count={counts.active} label="Active" onClick={() => setFilter("active")} />
-          <FilterButton active={filter === "completed"} count={counts.completed} label="Completed" onClick={() => setFilter("completed")} />
-          <FilterButton active={filter === "failed"} count={counts.failed} label="Needs attention" onClick={() => setFilter("failed")} />
+          <FilterButton active={filter === "all"} count={downloads.length} label={t("downloads")} onClick={() => setFilter("all")} />
+          <FilterButton active={filter === "active"} count={counts.active} label={t("active")} onClick={() => setFilter("active")} />
+          <FilterButton active={filter === "completed"} count={counts.completed} label={t("completed")} onClick={() => setFilter("completed")} />
+          <FilterButton active={filter === "failed"} count={counts.failed} label={t("attention")} onClick={() => setFilter("failed")} />
         </nav>
         <div className="privacy-note">
-          Private by design
-          <small>No accounts. No telemetry.</small>
+          {t("privateDesign")}
+          <small>{t("noTelemetry")}</small>
         </div>
+        <details className="settings-panel">
+          <summary>{t("settings")}</summary>
+          <label>
+            {t("theme")}
+            <select value={settings.theme} onChange={(event) => setSettings((current) => ({ ...current, theme: event.target.value as AppSettings["theme"] }))}>
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+          <label>
+            {t("language")}
+            <select value={settings.language} onChange={(event) => setSettings((current) => ({ ...current, language: event.target.value as AppSettings["language"] }))}>
+              <option value="en">English</option>
+              <option value="ar">العربية</option>
+            </select>
+          </label>
+          <label>
+            {t("retryAttempts")}
+            <input type="number" min={1} max={10} value={settings.retryAttempts} onChange={(event) => setSettings((current) => ({ ...current, retryAttempts: Math.max(1, Math.min(10, Number(event.target.value))) }))} />
+          </label>
+          <label>
+            {t("connectionsDownload")}
+            <input type="number" min={1} max={16} value={settings.maxSegments} onChange={(event) => setSettings((current) => ({ ...current, maxSegments: Math.max(1, Math.min(16, Number(event.target.value))) }))} />
+          </label>
+          <label>
+            {t("connectionsServer")}
+            <input type="number" min={1} max={32} value={settings.maxConnectionsPerHost} onChange={(event) => setSettings((current) => ({ ...current, maxConnectionsPerHost: Math.max(1, Math.min(32, Number(event.target.value))) }))} />
+          </label>
+          <label>
+            Per-download limit (KiB/s, 0 = unlimited)
+            <input type="number" min={0} step={128} value={settings.perDownloadSpeedLimitBps === null ? 0 : Math.round(settings.perDownloadSpeedLimitBps / 1024)} onChange={(event) => { const value = Math.max(0, Number(event.target.value)); setSettings((current) => ({ ...current, perDownloadSpeedLimitBps: value === 0 ? null : value * 1024 })); }} />
+          </label>
+          <label>
+            Global limit (KiB/s, 0 = unlimited)
+            <input type="number" min={0} step={128} value={settings.globalSpeedLimitBps === null ? 0 : Math.round(settings.globalSpeedLimitBps / 1024)} onChange={(event) => { const value = Math.max(0, Number(event.target.value)); setSettings((current) => ({ ...current, globalSpeedLimitBps: value === 0 ? null : value * 1024 })); }} />
+          </label>
+          <label className="checkbox-setting">
+            <input type="checkbox" checked={settings.notifications} onChange={(event) => setSettings((current) => ({ ...current, notifications: event.target.checked }))} />
+            {t("notifications")}
+          </label>
+          <button className="bridge-button" type="button" onClick={() => void revealBrowserBridge()}>
+            Browser extension setup
+          </button>
+          {bridgeInfo && (
+            <div className="bridge-secret">
+              <span>Native host</span>
+              <code>{bridgeInfo.hostName}</code>
+              <span>Pairing token</span>
+              <code>{bridgeInfo.token}</code>
+              <small title={bridgeInfo.configPath}>Keep this token private.</small>
+            </div>
+          )}
+        </details>
       </aside>
 
       <main className="workspace">
         <header>
           <div>
             <p className="eyebrow">DOWNLOAD MANAGER</p>
-            <h1>{filter === "all" ? "Downloads" : FILTER_LABELS[filter]}</h1>
+            <h1>{filter === "all" ? t("downloads") : FILTER_LABELS[filter]}</h1>
           </div>
           <span className="engine-badge"><i /> Engine ready</span>
         </header>
 
         <section className="quick-add" aria-labelledby="quick-add-title">
           <div>
-            <p className="eyebrow">NEW DOWNLOAD</p>
-            <h2 id="quick-add-title">Paste a direct HTTP or HTTPS link</h2>
+            <p className="eyebrow">{t("newDownload")}</p>
+            <h2 id="quick-add-title">{t("pasteLink")}</h2>
           </div>
           <form onSubmit={inspectLink}>
-            <label htmlFor="download-url">Download URL</label>
+            <label htmlFor="download-url">{t("downloadUrl")}</label>
             <div className="url-row">
               <input
                 id="download-url"
@@ -331,7 +544,7 @@ function App() {
                 required
               />
               <button className="primary" type="submit" disabled={inspecting || !url.trim()}>
-                {inspecting ? "Inspecting..." : "Inspect link"}
+                {inspecting ? t("inspecting") : t("inspect")}
               </button>
             </div>
           </form>
@@ -345,11 +558,25 @@ function App() {
                 <div><span>Change validator</span><strong>{inspection.hasValidator ? "Protected" : "Not provided"}</strong></div>
               </div>
               <button className="primary save-button" type="button" onClick={chooseDestination} disabled={choosingDestination}>
-                {choosingDestination ? "Opening..." : "Choose location and download"}
+                {choosingDestination ? t("opening") : t("choose")}
               </button>
             </div>
           )}
         </section>
+
+        {browserRequests.length > 0 && (
+          <section className="browser-inbox" aria-label="Browser download requests">
+            <div>
+              <strong>{browserRequests.length} browser {browserRequests.length === 1 ? "request" : "requests"}</strong>
+              <span>Review before choosing a save location. QuiverDL never captures cookies or browsing history.</span>
+            </div>
+            {browserRequests.slice(0, 3).map((request) => (
+              <button type="button" key={request.id} onClick={() => void reviewBrowserRequest(request)}>
+                Review {request.suggestedFilename ?? (() => { try { return new URL(request.url).hostname; } catch { return "download"; } })()}
+              </button>
+            ))}
+          </section>
+        )}
 
         <section className="downloads-panel" aria-live="polite">
           <div className="panel-heading">
@@ -359,10 +586,10 @@ function App() {
           {visibleDownloads.length === 0 ? (
             <div className="empty-state">
               <div className="target-icon" aria-hidden="true"><span>DL</span></div>
-              <h3>{downloads.length === 0 ? "Your queue is empty" : "Nothing in this view"}</h3>
+              <h3>{downloads.length === 0 ? t("empty") : "Nothing in this view"}</h3>
               <p>
                 {downloads.length === 0
-                  ? "Paste a direct link above, inspect it, and choose where to save the file."
+                  ? t("emptyHint")
                   : "Choose another filter to see your downloads."}
               </p>
             </div>
@@ -374,6 +601,7 @@ function App() {
                   key={item.id}
                   onControl={(action) => void controlDownload(item, action)}
                   onRemove={() => removeDownload(item.id)}
+                  onRetry={() => retryDownload(item)}
                 />
               ))}
             </div>
@@ -382,6 +610,16 @@ function App() {
       </main>
     </div>
   );
+}
+
+async function notifyCompleted(name: string) {
+  let granted = await isPermissionGranted();
+  if (!granted) {
+    granted = (await requestPermission()) === "granted";
+  }
+  if (granted) {
+    sendNotification({ title: "QuiverDL", body: `${name} finished downloading.` });
+  }
 }
 
 function FilterButton({ active, count, label, onClick }: { active: boolean; count: number; label: string; onClick: () => void }) {
@@ -394,7 +632,7 @@ function FilterButton({ active, count, label, onClick }: { active: boolean; coun
   );
 }
 
-function DownloadRow({ item, onControl, onRemove }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void }) {
+function DownloadRow({ item, onControl, onRemove, onRetry }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void }) {
   const percentage = item.totalBytes !== null && item.totalBytes > 0n
     ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
@@ -428,8 +666,9 @@ function DownloadRow({ item, onControl, onRemove }: { item: DownloadItem; onCont
       </div>
       <div className="row-actions">
         {canPause && <button type="button" onClick={() => onControl("pause")}>Pause</button>}
-        {item.status === "paused" && <button type="button" onClick={() => onControl("resume")}>Resume</button>}
+        {item.status === "paused" && <button type="button" onClick={() => item.recoverable ? onRetry() : onControl("resume")}>Resume</button>}
         {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}
+        {(item.status === "failed" || item.status === "cancelled") && <button type="button" onClick={onRetry}>Retry</button>}
         {!isActive && <button type="button" onClick={onRemove}>Remove</button>}
       </div>
     </article>

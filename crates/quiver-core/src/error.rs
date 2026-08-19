@@ -15,6 +15,9 @@ pub enum Error {
     #[error("the server returned an invalid or inconsistent response: {0}")]
     InvalidResponse(String),
 
+    #[error("the server returned a temporary response: {0}")]
+    TransientResponse(String),
+
     #[error("download was cancelled")]
     Cancelled,
 
@@ -32,3 +35,10 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::Http(_) | Self::TransientResponse(_))
+    }
+}

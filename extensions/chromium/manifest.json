@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "QuiverDL Browser Companion",
+  "version": "0.1.0",
+  "description": "Send explicitly selected downloads to QuiverDL.",
+  "permissions": ["contextMenus", "downloads", "nativeMessaging", "storage"],
+  "background": { "service_worker": "background.js" },
+  "options_page": "options.html",
+  "action": { "default_title": "QuiverDL" }
+}

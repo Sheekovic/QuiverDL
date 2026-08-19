@@ -10,8 +10,8 @@ QuiverDL is a performance-first, privacy-respecting open-source download manager
 native Rust engine with a lightweight Tauri and React desktop application.
 
 > [!IMPORTANT]
-> QuiverDL is in early development. The engine and desktop foundation are real and tested, but
-> there are no official end-user releases yet.
+> QuiverDL is pre-release software. The implementation is functional and tested, but the first
+> public signed release still requires repository-owner signing credentials and clean-machine QA.
 
 ## Why QuiverDL?
 
@@ -24,15 +24,16 @@ native Rust engine with a lightweight Tauri and React desktop application.
 
 ## Current status
 
-The first engine slice supports HTTP and HTTPS transfers, staged partial files, validator-gated
-resume with response-range validation, pause and cancel controls, progress events, and SHA-256
-verification. The desktop app can inspect a URL, open a native Save As dialog, run real downloads,
-show ordered progress, pause or resume active work, cancel safely, and filter completed or failed
-items. Its interface follows the operating system's light or dark theme.
+The native engine supports persistent validator-safe resume, bounded retries, trusted filename
+discovery, adaptive parallel range transfers, exact merge and SHA-256 verification, per-host
+connection policies, and speed limits. The desktop app persists its queue and settings atomically,
+recovers interrupted work, provides adaptive themes, English/Arabic direction support, tray and
+notification behavior, and never silently overwrites a destination.
 
-The next major milestones are persistent queue and crash recovery, retry policy, filename discovery
-from response headers, and bounded multi-segment downloading. See the [roadmap](ROADMAP.md) for
-approachable tasks and longer-term direction.
+Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
+capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
+See the [roadmap](ROADMAP.md), [threat model](docs/THREAT_MODEL.md), and
+[release process](docs/RELEASE.md) for the remaining credential-gated release step.
 
 ## Get involved
 
@@ -53,7 +54,9 @@ careful bug reports are valuable contributions.
 
 ```text
 crates/quiver-core/   Native download engine and domain model
+crates/quiver-native-host/ Authenticated browser native-messaging bridge
 apps/desktop/         Tauri 2 and React desktop application
+extensions/           Chromium, Firefox, and native-host installation assets
 docs/                 Architecture and product decisions
 ```
 

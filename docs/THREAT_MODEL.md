@@ -1,0 +1,45 @@
+# Threat model
+
+## Security goals
+
+QuiverDL must not write outside a user-selected destination, silently replace an existing file, append bytes from a changed remote object, expose private download data, or let an unauthenticated browser process enqueue work. A completed file must contain exactly the validated response bytes and, when supplied, match the expected SHA-256 digest.
+
+## Trust boundaries and threats
+
+### Remote download servers and networks
+
+Servers, redirects, headers, lengths, range responses, and filenames are untrusted. The engine accepts only HTTP(S), limits redirects, parses byte counts as `u64`, sanitizes suggested filenames, and never treats a filename as a path. Resume requires range support, a matching ETag or Last-Modified validator, a matching stored URL and total, and an exact returned `Content-Range`. Parallel segments additionally require a known size and validator; every start, end, total, and merged byte count is checked before hashing and atomic promotion.
+
+TLS protects HTTPS transport but does not make a server trustworthy. SHA-256 verifies content only when the user or publisher supplies an expected digest through a trusted channel.
+
+### Local filesystem and other processes
+
+Destinations must be absolute, parents are canonicalized, recovery sidecars are reserved against concurrent transfers, and completed files use no-replace atomic promotion. A local process running as the same user can still modify application files, partials, settings, or the destination; defending against a fully compromised user account is out of scope. Queue and bridge state use bounded JSON and atomic replacement. Release signing helps detect distribution tampering but does not protect a compromised running account.
+
+### Desktop webview and IPC
+
+The bundled UI is trusted application code. Tauri capabilities expose only the required dialog, notification, opener, and command surface to the main window. Backend commands revalidate identifiers, URLs, destinations, settings, and byte counts rather than trusting TypeScript types. Remote content is never rendered in the webview.
+
+### Browser extension and native messaging
+
+Native messages are length-prefixed and capped at 1 MiB. Requests require a random 256-bit pairing token compared in constant time, accept only versioned enqueue actions and HTTP(S) URLs, and write bounded request files with generated identifiers. The token is not written to inbox items or logs. Browser manifests restrict which extensions may launch the host.
+
+Manual context-menu capture is the default. Automatic interception is opt-in, constrained by minimum size and an optional exact-domain allowlist, and cancels the browser download only after the native host acknowledges the queue request. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; users should treat the local queue and pairing token as private.
+
+### Updates, dependencies, and release pipeline
+
+Pull requests run formatting, linting, tests on major desktop platforms, frontend builds, extension syntax checks, and dependency lockfiles. Tag releases require protected-environment signing secrets, Windows Authenticode signing, macOS Developer ID signing/notarization, and checksummed artifacts. Maintainer accounts, GitHub Actions dependencies, certificate authorities, and package registries remain supply-chain dependencies. Branch protection, least-privilege workflow permissions, review, Dependabot, and draft release inspection reduce that risk.
+
+## Availability and resource limits
+
+Retries, redirects, segments, per-host connections, queue length, message size, and settings are bounded. Speed limits are cooperative schedulers. A malicious server can remain slow, consume the configured partial-file disk space, or repeatedly return transient failures; users can cancel, and QuiverDL preserves resumable data when safe. Disk exhaustion and operating-system termination cannot be fully prevented.
+
+## Out of scope
+
+- Malware intentionally downloaded and executed by the user
+- A compromised operating system, browser, GitHub maintainer, or user account
+- DRM, paywall, authentication bypass, or copying content without authorization
+- Anonymity from servers, networks, DNS providers, or the user’s ISP
+- Guaranteed recovery when a server changes content without supplying validators
+
+Security assumptions and mitigations must be revisited before adding credential forwarding, proxy scripting, remote control APIs, automatic updates, or plugin execution.
