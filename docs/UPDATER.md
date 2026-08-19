@@ -72,7 +72,8 @@ Rollback uses only the immediately previous package already cached and verified 
 it never downloads a lower version from the network. A platform-specific recovery helper must:
 
 1. notice that the pending-start marker survived a failed launch or bounded health timeout;
-2. re-check the cached package's Tauri signature, recorded hash, and OS signature where available;
+2. re-check the cached package's Tauri signature with the version-scoped key recorded before the
+   update, plus its recorded hash and OS signature where available;
 3. restore the backwards-readable settings/queue backup without touching user downloads or partials;
 4. reinstall the previous package atomically, record the reason locally, and disable automatic
    retries of the rejected version; and
@@ -98,6 +99,12 @@ install that retained bridge or a later OS-signed package manually from the repo
 release page. Never claim that a one-release rotation reaches offline clients. A future seamless
 rotation requires a reviewed multi-key verifier or a version-aware endpoint that permanently serves
 an old-key-signed bridge to old clients.
+
+The bridge and the first new-key release must also retain the old public key in a rollback-only key
+ring. That verifier is scoped to the exact cached prior version, artifact hash, and pending-update
+record; it cannot authorize a network update. Keep each prior key until two later versions have
+started successfully, so both a failed bridge launch and a failed first new-key launch can
+authenticate their immediate cached predecessor.
 
 If the old private key is compromised, disable the update endpoint and direct users to a freshly
 OS-signed installer; do not silently trust a new updater key delivered by the compromised channel.

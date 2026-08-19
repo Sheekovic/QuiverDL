@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -74,7 +74,35 @@ test("rejects prereleases and duplicate platform artifacts", async () => {
     artifacts["linux-x86_64"] = artifacts["windows-x86_64"];
     await assert.rejects(
       generateManifest({ version: "1.2.3", baseUrl, artifacts }),
-      /distinct updater artifact path/,
+      /distinct updater artifact file identity/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects hard-linked platform aliases and noncanonical HTTPS ports", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const artifacts = await fixture(directory);
+    const alias = path.join(directory, "different-linux-name.bin");
+    await link(artifacts["windows-x86_64"], alias);
+    artifacts["linux-x86_64"] = alias;
+    await assert.rejects(
+      generateManifest({
+        version: "1.2.3",
+        baseUrl: "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3",
+        artifacts,
+      }),
+      /distinct updater artifact file identity/,
+    );
+    await assert.rejects(
+      generateManifest({
+        version: "1.2.3",
+        baseUrl: "https://github.com:444/Sheekovic/QuiverDL/releases/download/v1.2.3",
+        artifacts,
+      }),
+      /canonical HTTPS GitHub URL/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-import { link, lstat, readFile, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -31,7 +31,7 @@ function validateBaseUrl(value, version) {
     url.password ||
     url.search ||
     url.hash ||
-    url.hostname !== "github.com"
+    url.origin !== "https://github.com"
   ) {
     throw new Error("Update artifacts must use a credential-free canonical HTTPS GitHub URL");
   }
@@ -79,9 +79,19 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   if (keys.join("\n") !== SUPPORTED_PLATFORMS.join("\n")) {
     throw new Error(`Artifacts must include exactly: ${SUPPORTED_PLATFORMS.join(", ")}`);
   }
-  const pathKeys = keys.map((platform) => pathKey(artifacts[platform]));
-  if (new Set(pathKeys).size !== pathKeys.length) {
-    throw new Error("Each platform must use a distinct updater artifact path");
+  const pathKeys = [];
+  const identityKeys = [];
+  for (const platform of keys) {
+    const canonicalPath = await realpath(artifacts[platform]);
+    const info = await lstat(canonicalPath);
+    pathKeys.push(pathKey(canonicalPath));
+    identityKeys.push(`${info.dev}:${info.ino}`);
+  }
+  if (
+    new Set(pathKeys).size !== pathKeys.length ||
+    new Set(identityKeys).size !== identityKeys.length
+  ) {
+    throw new Error("Each platform must use a distinct updater artifact file identity");
   }
   const platforms = {};
   const urls = new Set();
