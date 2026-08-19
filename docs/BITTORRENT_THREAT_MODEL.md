@@ -47,6 +47,9 @@ peers, or addresses aimed at local services.
 - Require `name` and every path component to be strict UTF-8 before preview. Preserve that one
   validated Unicode representation through normalization, collision checks, IPC, persistence, and
   handle-relative creation; never display replacement characters for bytes that would be written.
+  Normalize to NFC once and reject Unicode format characters (`General_Category=Cf`), including
+  bidirectional marks, embeddings, overrides, and isolates. The exact previewed normalized string
+  is the only representation eligible for filesystem creation.
 - For v2/hybrid input, require `piece length` to be a power of two from 16 KiB through 16 MiB.
   Compute per-file piece counts with checked ceiling division, validate every pieces root and exact
   piece-layer hash count against the declared file lengths, and reject missing, extra, or
@@ -146,11 +149,12 @@ Before implementation begins, a proposal must:
 5. Provide deterministic parser and filesystem tests plus local fake tracker/peer integration tests
    for malicious messages, duplicate/unsorted keys at every dictionary layer, per-file and aggregate
    overflow, negative lengths, zero/out-of-range piece lengths, piece-count and Merkle-layer
-   mismatches, invalid UTF-8 paths, recovered-piece tampering, all Windows-invalid characters,
-   component/path length edges, file/directory prefix conflicts, adversarial symlink/reparse-point
-   swaps, trailing-dot/space and alternate-data-stream aliases, scheme rejection, hash failure,
-   cancellation, private torrents, special-use addresses, mixed-address DNS answers, redirect
-   changes, DNS rebinding, and resource exhaustion.
+   mismatches, invalid UTF-8 paths, Unicode format/bidirectional controls, recovered-piece
+   tampering, all Windows-invalid characters, component/path length edges, file/directory prefix
+   conflicts, adversarial symlink/reparse-point swaps, trailing-dot/space and
+   alternate-data-stream aliases, scheme rejection, hash failure, cancellation, private torrents,
+   special-use addresses, mixed-address DNS answers, redirect changes, DNS rebinding, and resource
+   exhaustion.
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 

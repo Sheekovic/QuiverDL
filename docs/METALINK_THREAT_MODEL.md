@@ -72,6 +72,9 @@ QuiverDL applies stricter platform-aware containment:
   drive or UNC prefixes, NUL/control characters, `/`, `\`, `<`, `>`, `:`, `"`, `|`, `?`, `*`,
   alternate-data-stream syntax, components ending in a dot or space, and Windows device names even
   when followed by an extension.
+- Normalize accepted text to NFC once, reject Unicode format characters (`General_Category=Cf`),
+  including bidirectional marks, embeddings, overrides, and isolates, and use the exact normalized
+  string shown in preview for all later collision checks and filesystem creation.
 - Bound every component to at most 240 UTF-8 bytes and 240 UTF-16 code units, the relative depth to
   32 components, and the encoded relative path to 2,048 bytes/code units before filesystem access.
 - Join only sanitized relative components beneath a destination root chosen after preview.
@@ -146,9 +149,9 @@ rebinding.
   numeric overflow, duplicate fields, unsupported hashes and schemes, deep nesting, and limit edges.
 - Cross-platform path tests cover traversal, separators, drive/UNC inputs, reserved names,
   all Windows-invalid characters, component/path length edges, trailing-dot/space aliases,
-  alternate data streams, Unicode/case and file/directory prefix collisions, existing short-name or
-  filesystem aliases, adversarial symlink/reparse-point swaps during creation, and destination
-  no-replace behavior.
+  alternate data streams, Unicode format/bidirectional controls, Unicode/case and file/directory
+  prefix collisions, existing short-name or filesystem aliases, adversarial
+  symlink/reparse-point swaps during creation, and destination no-replace behavior.
 - Local HTTP tests cover mirror fallback, redirect loops, size mismatch, digest mismatch,
   cancellation, proxy routing, resume policy, public-to-private redirects, mixed-address DNS
   answers, DNS rebinding, unverifiable proxy resolution, and failure without public-internet access.
