@@ -62,7 +62,12 @@ impl DownloadControl {
         self.inner.state.load(Ordering::Acquire) == CANCELLED
     }
 
-    pub(crate) async fn checkpoint(&self) -> Result<()> {
+    /// Wait until the transfer is runnable, or return if it was cancelled.
+    ///
+    /// Desktop and service frontends can use this before handing a queued
+    /// transfer to the engine so pause and cancellation semantics remain
+    /// consistent while the transfer is waiting to start.
+    pub async fn checkpoint(&self) -> Result<()> {
         loop {
             match self.inner.state.load(Ordering::Acquire) {
                 RUNNING => return Ok(()),
@@ -78,7 +83,8 @@ impl DownloadControl {
         }
     }
 
-    pub(crate) async fn cancelled(&self) {
+    /// Wait until cancellation is requested.
+    pub async fn cancelled(&self) {
         loop {
             let changed = self.inner.changed.notified();
             if self.is_cancelled() {

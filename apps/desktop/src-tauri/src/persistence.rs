@@ -8,7 +8,7 @@ use tokio::{
 };
 use url::Url;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
 const MAX_DOWNLOADS: usize = 10_000;
 const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -39,6 +39,7 @@ pub(crate) struct AppSettings {
     pub max_connections_per_host: u8,
     pub per_download_speed_limit_bps: Option<u64>,
     pub global_speed_limit_bps: Option<u64>,
+    pub queue_mode: String,
     pub proxy_mode: String,
     pub proxy_url: String,
     pub proxy_username: String,
@@ -58,6 +59,7 @@ impl Default for AppSettings {
             max_connections_per_host: 8,
             per_download_speed_limit_bps: None,
             global_speed_limit_bps: None,
+            queue_mode: "parallel".into(),
             proxy_mode: "disabled".into(),
             proxy_url: String::new(),
             proxy_username: String::new(),
@@ -87,6 +89,9 @@ impl AppSettings {
         }
         if !(1..=32).contains(&self.max_connections_per_host) {
             return Err("Per-server connection count must be between 1 and 32".into());
+        }
+        if !matches!(self.queue_mode.as_str(), "parallel" | "sequential") {
+            return Err("Unsupported queue mode".into());
         }
         if !matches!(self.proxy_mode.as_str(), "disabled" | "system" | "custom") {
             return Err("Unsupported proxy mode".into());
@@ -146,6 +151,10 @@ pub(crate) struct StoredDownload {
     pub sha256: Option<String>,
     pub resumed: Option<bool>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub queued_at_ms: Option<String>,
+    #[serde(default)]
+    pub scheduled_for_ms: Option<String>,
 }
 
 impl StoredDownload {
@@ -165,6 +174,8 @@ impl StoredDownload {
             || !matches!(
                 self.status.as_str(),
                 "starting"
+                    | "queued"
+                    | "scheduled"
                     | "probing"
                     | "retrying"
                     | "downloading"
@@ -177,6 +188,22 @@ impl StoredDownload {
             )
         {
             return Err("A saved download contains an invalid field".into());
+        }
+        let queued_at = self
+            .queued_at_ms
+            .as_deref()
+            .map(super::parse_queue_timestamp)
+            .transpose()?;
+        let scheduled_for = self
+            .scheduled_for_ms
+            .as_deref()
+            .map(super::parse_queue_timestamp)
+            .transpose()?;
+        if matches!(self.status.as_str(), "queued" | "scheduled") && queued_at.is_none() {
+            return Err("A queued download is missing its enqueue time".into());
+        }
+        if self.status == "scheduled" && scheduled_for.is_none() {
+            return Err("A scheduled download is missing its start time".into());
         }
         let downloaded = self
             .downloaded_bytes
@@ -458,6 +485,7 @@ mod tests {
         assert!(snapshot.settings.notifications);
         assert_eq!(snapshot.settings.theme, "system");
         assert_eq!(snapshot.settings.proxy_mode, "disabled");
+        assert_eq!(snapshot.settings.queue_mode, "parallel");
         assert_eq!(snapshot.downloads.len(), 0);
     }
 
@@ -514,9 +542,44 @@ mod tests {
             sha256: None,
             resumed: None,
             error: None,
+            queued_at_ms: None,
+            scheduled_for_ms: None,
         };
 
         download.validate().expect("multibyte name should be valid");
+    }
+
+    #[test]
+    fn validates_durable_queue_metadata() {
+        let destination = if cfg!(windows) {
+            "C:/Downloads/file.bin"
+        } else {
+            "/tmp/file.bin"
+        };
+        let scheduled = StoredDownload {
+            id: "scheduled-download".into(),
+            name: "file.bin".into(),
+            url: "https://example.test/file.bin".into(),
+            destination: destination.into(),
+            status: "scheduled".into(),
+            downloaded_bytes: "0".into(),
+            total_bytes: None,
+            sha256: None,
+            resumed: None,
+            error: None,
+            queued_at_ms: Some("1770000000000".into()),
+            scheduled_for_ms: Some("1770003600000".into()),
+        };
+
+        scheduled
+            .validate()
+            .expect("complete schedule metadata should be valid");
+        let mut missing_time = scheduled.clone();
+        missing_time.scheduled_for_ms = None;
+        assert!(missing_time.validate().is_err());
+        let mut invalid_time = scheduled;
+        invalid_time.queued_at_ms = Some("not-a-time".into());
+        assert!(invalid_time.validate().is_err());
     }
 
     #[tokio::test]

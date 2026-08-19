@@ -2,8 +2,8 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::OsString,
     path::{Component, Path, PathBuf},
-    sync::Mutex,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use quiver_core::{
@@ -17,7 +17,7 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use url::Url;
 
 mod browser_bridge;
@@ -39,6 +39,7 @@ struct TransferRegistry {
     transfers: Mutex<HashMap<String, ActiveTransfer>>,
     global_limiter: BandwidthLimiter,
     host_policy: HostConnectionPolicy,
+    sequential_gate: Arc<Semaphore>,
 }
 
 impl Default for TransferRegistry {
@@ -47,6 +48,7 @@ impl Default for TransferRegistry {
             transfers: Mutex::default(),
             global_limiter: BandwidthLimiter::unlimited(),
             host_policy: HostConnectionPolicy::default(),
+            sequential_gate: Arc::new(Semaphore::new(1)),
         }
     }
 }
@@ -125,13 +127,18 @@ async fn start_download(
     url: String,
     destination: String,
     settings: Option<AppSettings>,
+    scheduled_for_ms: Option<String>,
     on_event: Channel<DownloadProgress>,
 ) -> Result<DownloadSummary, String> {
     let task_id = validate_task_id(&task_id)?;
     let url = Url::parse(url.trim()).map_err(|error| format!("Invalid URL: {error}"))?;
-    let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
     settings.validate()?;
+    let scheduled_for_ms = scheduled_for_ms
+        .as_deref()
+        .map(parse_queue_timestamp)
+        .transpose()?;
+    let destination = prepare_destination(&destination).await?;
     let engine = DownloadEngine::new_with_proxy(proxy_policy(&settings).await?)
         .map_err(|error| error.to_string())?
         .with_global_limiter(Some(registry.global_limiter.clone()))
@@ -177,6 +184,21 @@ async fn start_download(
         );
     }
 
+    let _queue_permit = match wait_for_queue_turn(
+        &control,
+        scheduled_for_ms,
+        &settings.queue_mode,
+        registry.sequential_gate.clone(),
+    )
+    .await
+    {
+        Ok(permit) => permit,
+        Err(error) => {
+            remove_transfer(&registry, &task_id);
+            return Err(error);
+        }
+    };
+
     let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressEvent>(32);
     let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
@@ -198,9 +220,7 @@ async fn start_download(
     });
 
     let result = engine.download(request, control, progress_tx).await;
-    if let Ok(mut transfers) = registry.transfers.lock() {
-        transfers.remove(&task_id);
-    }
+    remove_transfer(&registry, &task_id);
     let _ = forwarder.await;
 
     let result = result.map_err(|error| error.to_string())?;
@@ -213,6 +233,72 @@ async fn start_download(
             .collect(),
         resumed: result.resumed,
     })
+}
+
+const MAX_QUEUE_TIMESTAMP_MS: u64 = 32_503_680_000_000;
+
+pub(crate) fn parse_queue_timestamp(value: &str) -> Result<u64, String> {
+    if value.is_empty() || value.len() > 14 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("A queue timestamp is invalid".into());
+    }
+    let timestamp = value
+        .parse::<u64>()
+        .map_err(|_| "A queue timestamp is invalid".to_string())?;
+    if timestamp > MAX_QUEUE_TIMESTAMP_MS {
+        return Err("A queue timestamp is outside the supported range".into());
+    }
+    Ok(timestamp)
+}
+
+fn unix_time_ms() -> Result<u64, String> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "The system clock is before the Unix epoch".to_string())?
+        .as_millis();
+    u64::try_from(milliseconds)
+        .map_err(|_| "The system clock is outside the supported range".into())
+}
+
+async fn wait_for_queue_turn(
+    control: &DownloadControl,
+    scheduled_for_ms: Option<u64>,
+    queue_mode: &str,
+    sequential_gate: Arc<Semaphore>,
+) -> Result<Option<OwnedSemaphorePermit>, String> {
+    if let Some(scheduled_for_ms) = scheduled_for_ms {
+        let now = unix_time_ms()?;
+        if scheduled_for_ms > now {
+            tokio::select! {
+                _ = control.cancelled() => return Err("download was cancelled".into()),
+                () = tokio::time::sleep(Duration::from_millis(scheduled_for_ms - now)) => {}
+            }
+        }
+    }
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if queue_mode != "sequential" {
+        return Ok(None);
+    }
+    let permit = tokio::select! {
+        _ = control.cancelled() => return Err("download was cancelled".into()),
+        permit = sequential_gate.acquire_owned() => {
+            permit.map_err(|_| "The sequential queue is unavailable".to_string())?
+        }
+    };
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(Some(permit))
+}
+
+fn remove_transfer(registry: &TransferRegistry, task_id: &str) {
+    if let Ok(mut transfers) = registry.transfers.lock() {
+        transfers.remove(task_id);
+    }
 }
 
 async fn proxy_policy(settings: &AppSettings) -> Result<ProxyPolicy, String> {
@@ -498,8 +584,9 @@ mod tests {
     use quiver_core::DownloadStatus;
 
     use super::{
-        AppSettings, DownloadProgress, prepare_destination, proxy_policy, sanitize_filename,
-        validate_destination, validate_task_id,
+        AppSettings, DownloadProgress, TransferRegistry, parse_queue_timestamp,
+        prepare_destination, proxy_policy, sanitize_filename, validate_destination,
+        validate_task_id, wait_for_queue_turn,
     };
 
     #[test]
@@ -507,6 +594,64 @@ mod tests {
         assert_eq!(validate_task_id("download-42"), Ok("download-42".into()));
         assert!(validate_task_id("../download").is_err());
         assert!(validate_task_id("").is_err());
+    }
+
+    #[test]
+    fn validates_queue_timestamps_without_lossy_number_conversion() {
+        assert_eq!(
+            parse_queue_timestamp("1770000000000"),
+            Ok(1_770_000_000_000)
+        );
+        assert!(parse_queue_timestamp("").is_err());
+        assert!(parse_queue_timestamp("1770.5").is_err());
+        assert!(parse_queue_timestamp("32503680000001").is_err());
+    }
+
+    #[tokio::test]
+    async fn sequential_queue_waits_for_the_previous_permit() {
+        let registry = TransferRegistry::default();
+        let first = registry
+            .sequential_gate
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("first queue permit");
+        let waiter = tokio::spawn({
+            let gate = registry.sequential_gate.clone();
+            async move {
+                wait_for_queue_turn(
+                    &quiver_core::DownloadControl::new(),
+                    None,
+                    "sequential",
+                    gate,
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        drop(first);
+        assert!(waiter.await.expect("queue waiter should join").is_ok());
+    }
+
+    #[tokio::test]
+    async fn scheduled_wait_can_be_cancelled() {
+        let control = quiver_core::DownloadControl::new();
+        let waiter = tokio::spawn({
+            let control = control.clone();
+            async move {
+                wait_for_queue_turn(
+                    &control,
+                    Some(32_503_680_000_000),
+                    "parallel",
+                    std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
+                )
+                .await
+            }
+        });
+        control.cancel();
+        assert!(waiter.await.expect("scheduled waiter should join").is_err());
     }
 
     #[tokio::test]
