@@ -321,11 +321,15 @@ async fn start_download(
         registry: &registry,
         task_id: task_id.clone(),
     };
-    let destination = prepare_destination(&destination).await?;
-    control
-        .checkpoint()
-        .await
-        .map_err(|error| error.to_string())?;
+    let (destination, _queue_permit) = prepare_and_reserve_destination(
+        &registry,
+        &task_id,
+        &destination,
+        &control,
+        scheduled_for_ms,
+        queue_ticket,
+    )
+    .await?;
     let engine = DownloadEngine::new_with_proxy(proxy_policy(&settings).await?)
         .map_err(|error| error.to_string())?
         .with_global_limiter(Some(registry.global_limiter.clone()))
@@ -342,42 +346,6 @@ async fn start_download(
         min_segment_bytes: 8 * 1024 * 1024,
         per_download_speed_limit_bps: settings.per_download_speed_limit_bps,
     };
-    {
-        let mut transfers = registry
-            .transfers
-            .lock()
-            .map_err(|_| "Download controls are unavailable".to_string())?;
-        if transfers.iter().any(|(id, transfer)| {
-            id != &task_id
-                && !transfer
-                    .reservation_keys
-                    .is_disjoint(&destination.reservation_keys)
-        }) {
-            return Err(
-                "Another active download is already using this destination or its recovery files"
-                    .into(),
-            );
-        }
-        let transfer = transfers
-            .get_mut(&task_id)
-            .ok_or_else(|| "This download is no longer registered".to_string())?;
-        transfer.reservation_keys = destination.reservation_keys;
-    }
-
-    let _queue_permit = match wait_for_queue_turn(
-        &control,
-        scheduled_for_ms,
-        queue_ticket,
-        registry.sequential_queue.clone(),
-    )
-    .await
-    {
-        Ok(permit) => permit,
-        Err(error) => {
-            return Err(error);
-        }
-    };
-
     let (progress_tx, mut progress_rx) = mpsc::channel::<ProgressEvent>(32);
     let forwarding_control = control.clone();
     let forwarder = tauri::async_runtime::spawn(async move {
@@ -487,6 +455,54 @@ async fn wait_for_queue_turn(
         .await
         .map_err(|error| error.to_string())?;
     Ok(Some(permit))
+}
+
+async fn prepare_and_reserve_destination(
+    registry: &TransferRegistry,
+    task_id: &str,
+    destination: &str,
+    control: &DownloadControl,
+    scheduled_for_ms: Option<u64>,
+    queue_ticket: Option<u64>,
+) -> Result<(PreparedDestination, Option<SequentialPermit>), String> {
+    // Sequential work must own its FIFO turn before it can reserve a path. Otherwise a
+    // newer task whose filesystem preparation finishes first could reject the older task.
+    let queue_permit = wait_for_queue_turn(
+        control,
+        scheduled_for_ms,
+        queue_ticket,
+        registry.sequential_queue.clone(),
+    )
+    .await?;
+    let destination = prepare_destination(destination).await?;
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    {
+        let mut transfers = registry
+            .transfers
+            .lock()
+            .map_err(|_| "Download controls are unavailable".to_string())?;
+        if transfers.iter().any(|(id, transfer)| {
+            id != task_id
+                && !transfer
+                    .reservation_keys
+                    .is_disjoint(&destination.reservation_keys)
+        }) {
+            return Err(
+                "Another active download is already using this destination or its recovery files"
+                    .into(),
+            );
+        }
+        let transfer = transfers
+            .get_mut(task_id)
+            .ok_or_else(|| "This download is no longer registered".to_string())?;
+        transfer.reservation_keys = destination.reservation_keys.clone();
+    }
+
+    Ok((destination, queue_permit))
 }
 
 fn remove_transfer(registry: &TransferRegistry, task_id: &str) {
@@ -828,8 +844,9 @@ mod tests {
     use super::{
         ActiveTransfer, AppSettings, DownloadProgress, SequentialQueue, TransferRegistry,
         claim_registered_transfer, parse_queue_sequence, parse_queue_timestamp,
-        prepare_destination, proxy_policy, sanitize_filename, schedule_sleep_duration,
-        validate_destination, validate_task_id, wait_for_queue_turn,
+        prepare_and_reserve_destination, prepare_destination, proxy_policy, remove_transfer,
+        sanitize_filename, schedule_sleep_duration, validate_destination, validate_task_id,
+        wait_for_queue_turn,
     };
 
     #[test]
@@ -940,6 +957,83 @@ mod tests {
 
         drop(first);
         assert!(second.await.expect("queue waiter should join").is_ok());
+    }
+
+    #[tokio::test]
+    async fn older_sequential_ticket_reserves_a_shared_destination_first() {
+        let registry = std::sync::Arc::new(TransferRegistry::default());
+        registry
+            .sequential_queue
+            .register(0, None)
+            .expect("older ticket");
+        registry
+            .sequential_queue
+            .register(1, None)
+            .expect("newer ticket");
+        let older_control = quiver_core::DownloadControl::new();
+        let newer_control = quiver_core::DownloadControl::new();
+        {
+            let mut transfers = registry.transfers.lock().expect("transfer registry");
+            for (task_id, ticket, control) in [
+                ("older", 0, older_control.clone()),
+                ("newer", 1, newer_control.clone()),
+            ] {
+                transfers.insert(
+                    task_id.into(),
+                    ActiveTransfer {
+                        control,
+                        reservation_keys: std::collections::HashSet::new(),
+                        queue_ticket: Some(ticket),
+                        scheduled_for_ms: None,
+                        started: true,
+                    },
+                );
+            }
+        }
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let destination = directory.path().join("shared.bin");
+        let destination = destination.to_string_lossy().into_owned();
+
+        let newer = tokio::spawn({
+            let registry = registry.clone();
+            let destination = destination.clone();
+            async move {
+                prepare_and_reserve_destination(
+                    &registry,
+                    "newer",
+                    &destination,
+                    &newer_control,
+                    None,
+                    Some(1),
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!newer.is_finished());
+
+        let (_destination, older_permit) = prepare_and_reserve_destination(
+            &registry,
+            "older",
+            &destination,
+            &older_control,
+            None,
+            Some(0),
+        )
+        .await
+        .expect("older task should reserve first");
+        assert!(!newer.is_finished());
+
+        remove_transfer(&registry, "older");
+        drop(older_permit);
+        assert!(
+            newer
+                .await
+                .expect("newer task should join")
+                .expect("newer task should reserve after older cleanup")
+                .1
+                .is_some()
+        );
     }
 
     #[tokio::test]
