@@ -46,9 +46,14 @@ peers, or addresses aimed at local services.
   case-folded collisions.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
-- Present the full file tree and exact selected byte total before allocation or peer discovery.
-  Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
-  accounted for and removed safely.
+- For a `.torrent` file, present the full file tree and exact selected byte total before allocation
+  or network discovery. A magnet requires two stages because its file tree is not available yet:
+  first confirm narrowly bounded metadata discovery with its IP/discovery privacy effects, then
+  hash-check and validate the metadata and present the full tree for a second confirmation before
+  allocation, content-piece requests, or uploading.
+- Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
+  accounted for and removed safely. Cancelling between magnet consent stages stops discovery and
+  discards its temporary metadata safely.
 - Bound and hash-check metadata received through a magnet before showing it as trusted. A matching
   info-hash identifies the requested metadata but does not authenticate its publisher or make its
   filenames safe.
@@ -67,9 +72,11 @@ QuiverDL verifies it before completion. The UI must distinguish **piece-verified
 
 ## Network, privacy, and consent requirements
 
-- A confirmation screen must explain that the user's IP address and torrent identifier can be
-  visible, that downloading normally uploads pieces, which trackers and discovery mechanisms will
-  run, and when network activity will stop.
+- Before any network discovery, an initial confirmation must explain that the user's IP address and
+  torrent identifier can be visible, that downloading normally uploads pieces, which trackers and
+  discovery mechanisms will run, and when network activity will stop. For a magnet, this first
+  consent authorizes metadata retrieval only; verified file selection and content transfer require
+  the second confirmation described above.
 - No tracker contact, DNS lookup, DHT lookup, local discovery, peer connection, listener, or port
   mapping occurs before confirmation. Browser interception for `.torrent` and magnet links remains
   disabled until a separate reviewed integration milestone.
