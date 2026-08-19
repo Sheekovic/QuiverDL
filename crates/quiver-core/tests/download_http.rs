@@ -266,6 +266,40 @@ async fn cancellation_interrupts_a_stalled_response() {
     server.await.expect("fixture server should finish");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn refuses_a_symlinked_partial_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let (url, server) = fixture_server(2).await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let destination = directory.path().join("fixture.bin");
+    let partial = directory.path().join("fixture.bin.quiver-part");
+    let target = directory.path().join("target.bin");
+    tokio::fs::write(&target, b"")
+        .await
+        .expect("target should exist");
+    symlink(&target, &partial).expect("partial symlink should be created");
+    let (progress_tx, progress_rx) = mpsc::channel::<ProgressEvent>(32);
+    drop(progress_rx);
+
+    DownloadEngine::new()
+        .expect("engine should initialize")
+        .download(
+            DownloadRequest::new(url, destination),
+            DownloadControl::new(),
+            progress_tx,
+        )
+        .await
+        .expect_err("a recovery symlink must be rejected");
+
+    assert_eq!(
+        tokio::fs::read(target).await.expect("target should read"),
+        b""
+    );
+    server.await.expect("fixture server should finish");
+}
+
 async fn fixture_server(expected_requests: usize) -> (Url, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

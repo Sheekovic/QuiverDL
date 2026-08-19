@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 
-use crate::Result;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PartialState {
@@ -35,7 +35,7 @@ pub(crate) async fn load(path: &Path) -> Result<Option<PartialState>> {
 pub(crate) async fn save(path: &Path, state: &PartialState) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(state)?;
     let temporary = sibling_with_suffix(path, ".tmp");
-    let mut file = tokio::fs::File::create(&temporary).await?;
+    let mut file = open_regular_file(&temporary, false, true).await?;
     file.write_all(&bytes).await?;
     file.sync_all().await?;
     drop(file);
@@ -45,6 +45,31 @@ pub(crate) async fn save(path: &Path, state: &PartialState) -> Result<()> {
         .await
         .map_err(std::io::Error::other)??;
     Ok(())
+}
+
+pub(crate) async fn open_regular_file(
+    path: &Path,
+    append: bool,
+    truncate: bool,
+) -> Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options
+        .create(true)
+        .write(true)
+        .append(append)
+        .truncate(truncate);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
+    if !file.metadata().await?.is_file() {
+        return Err(Error::InvalidResponse(format!(
+            "recovery path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    Ok(file)
 }
 
 #[cfg(windows)]

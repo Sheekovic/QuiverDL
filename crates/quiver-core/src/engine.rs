@@ -290,14 +290,7 @@ impl DownloadEngine {
             });
         }
 
-        let mut options = tokio::fs::OpenOptions::new();
-        options.create(true).write(true);
-        if offset > 0 {
-            options.append(true);
-        } else {
-            options.truncate(true);
-        }
-        let mut file = options.open(&partial_path).await?;
+        let mut file = state::open_regular_file(&partial_path, offset > 0, offset == 0).await?;
         let mut downloaded = offset;
         let resumed = offset > 0;
         emit(
@@ -454,12 +447,7 @@ impl DownloadEngine {
         let transfer_result: Result<u64> = async {
             try_join_all(transfers).await?;
             control.checkpoint().await?;
-            let mut output = tokio::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(partial_path)
-                .await?;
+            let mut output = state::open_regular_file(partial_path, false, true).await?;
             let mut merged = 0_u64;
             for path in &segment_paths {
                 let mut segment = tokio::fs::File::open(path).await?;
@@ -590,12 +578,7 @@ async fn download_segment(
         )));
     }
 
-    let mut output = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(path)
-        .await?;
+    let mut output = state::open_regular_file(&path, true, false).await?;
     let mut segment_bytes = existing_bytes;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = tokio::select! {
