@@ -140,6 +140,11 @@ pub(crate) async fn get_browser_bridge_info() -> Result<BrowserBridgeInfo, Strin
 #[tauri::command]
 pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, String> {
     let (_, config) = ensure_config().await?;
+    match validate_private_directory(&config.inbox_dir).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("The browser inbox is unsafe: {error}")),
+    }
     let mut directory = match tokio::fs::read_dir(&config.inbox_dir).await {
         Ok(directory) => directory,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -163,17 +168,23 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
         entries_scanned += 1;
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
+            quarantine_invalid_entry(&path, &rejected_directory)
+                .await
+                .map_err(|error| format!("Could not quarantine an invalid inbox entry: {error}"))?;
             continue;
         }
         let Ok(Some(bytes)) =
             super::persistence::read_bounded_regular_file(&path, MAX_INBOX_ITEM_BYTES).await
         else {
-            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
+            quarantine_invalid_entry(&path, &rejected_directory)
+                .await
+                .map_err(|error| format!("Could not quarantine an invalid inbox entry: {error}"))?;
             continue;
         };
         let Ok(request) = parse_inbox_item(&path, &bytes) else {
-            let _ = quarantine_invalid_entry(&path, &rejected_directory).await;
+            quarantine_invalid_entry(&path, &rejected_directory)
+                .await
+                .map_err(|error| format!("Could not quarantine an invalid inbox entry: {error}"))?;
             continue;
         };
         requests.push(request);
@@ -186,7 +197,12 @@ async fn quarantine_invalid_entry(
     path: &std::path::Path,
     rejected_directory: &std::path::Path,
 ) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(rejected_directory).await?;
+    match tokio::fs::create_dir(rejected_directory).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    validate_private_directory(rejected_directory).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -198,6 +214,27 @@ async fn quarantine_invalid_entry(
         hex::encode(rand::random::<[u8; 16]>())
     ));
     tokio::fs::rename(path, destination).await
+}
+
+async fn validate_private_directory(path: &std::path::Path) -> std::io::Result<()> {
+    let metadata = tokio::fs::symlink_metadata(path).await?;
+    #[cfg(windows)]
+    let is_reparse_point = {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes()
+            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+            != 0
+    };
+    #[cfg(not(windows))]
+    let is_reparse_point = false;
+    let invalid = !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point;
+    if invalid {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path is not a real directory",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInboxItem, String> {
@@ -307,5 +344,37 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn quarantine_failure_is_reported() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let invalid = directory.path().join("malformed.json");
+        let rejected = directory.path().join("rejected-inbox");
+        tokio::fs::write(&invalid, b"invalid")
+            .await
+            .expect("invalid entry");
+        tokio::fs::write(&rejected, b"not a directory")
+            .await
+            .expect("blocking entry");
+
+        assert!(quarantine_invalid_entry(&invalid, &rejected).await.is_err());
+        assert!(tokio::fs::try_exists(invalid).await.expect("inspect inbox"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn linked_inbox_directories_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        let inbox = directory.path().join("inbox");
+        tokio::fs::create_dir(&target)
+            .await
+            .expect("target directory");
+        symlink(&target, &inbox).expect("directory symlink");
+
+        assert!(super::validate_private_directory(&inbox).await.is_err());
     }
 }
