@@ -277,8 +277,13 @@ pub(crate) async fn save_app_state(
 }
 
 async fn open_private_regular_file(path: &Path) -> std::io::Result<tokio::fs::File> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     let mut options = tokio::fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
     #[cfg(windows)]
@@ -419,10 +424,45 @@ mod tests {
             .expect("target should write");
         symlink(&target, &temporary).expect("symlink should be created");
 
-        assert!(super::open_private_regular_file(&temporary).await.is_err());
+        super::open_private_regular_file(&temporary)
+            .await
+            .expect("symlink entry should be replaced safely");
         assert_eq!(
             tokio::fs::read(target).await.expect("target should read"),
             b"preserve me"
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_temp_write_does_not_truncate_a_hard_link_target() {
+        use tokio::io::AsyncWriteExt;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("unrelated");
+        let temporary = directory.path().join("state.json.tmp");
+        tokio::fs::write(&target, b"preserve me")
+            .await
+            .expect("target should write");
+        std::fs::hard_link(&target, &temporary).expect("hard link should be created");
+
+        let mut file = super::open_private_regular_file(&temporary)
+            .await
+            .expect("hard-link entry should be replaced safely");
+        file.write_all(b"new queue")
+            .await
+            .expect("temporary queue should write");
+        file.sync_all().await.expect("temporary queue should sync");
+        drop(file);
+
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"preserve me"
+        );
+        assert_eq!(
+            tokio::fs::read(temporary)
+                .await
+                .expect("temporary queue should read"),
+            b"new queue"
         );
     }
 }
