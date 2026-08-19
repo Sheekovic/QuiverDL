@@ -23,7 +23,7 @@ api.downloads.onCreated.addListener((item) => {
   void (async () => {
     const current = await settings();
     if (!current.interceptionEnabled || !/^https?:/.test(item.url)) return;
-    if (item.totalBytes > 0 && item.totalBytes < current.minimumBytes) return;
+    if (!Number.isSafeInteger(item.totalBytes) || item.totalBytes < 0 || item.totalBytes < current.minimumBytes) return;
     const hostname = new URL(item.url).hostname.toLowerCase();
     if (current.allowedDomains.length > 0 && !current.allowedDomains.includes(hostname)) return;
     const response = await enqueue(item.url, item.filename?.split(/[\\/]/).pop());

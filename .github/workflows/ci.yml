@@ -66,6 +66,7 @@ jobs:
           node --check ../../extensions/chromium/options.js
           node --check ../../extensions/firefox/background.js
           node --check ../../extensions/firefox/options.js
+          node ../../extensions/test-background-policy.mjs
           node -e "for (const file of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(file, 'utf8'))" ../../extensions/chromium/manifest.json ../../extensions/firefox/manifest.json ../../extensions/native-host/chromium-host.json ../../extensions/native-host/firefox-host.json
           sh -n ../../extensions/native-host/install-linux.sh
           sh -n ../../extensions/native-host/install-macos.sh
