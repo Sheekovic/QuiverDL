@@ -372,6 +372,14 @@ fn sanitize_filename(value: Option<&str>) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _working_directory| {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .manage(TransferRegistry::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;

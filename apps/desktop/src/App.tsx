@@ -192,6 +192,8 @@ function App() {
   const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
   const stateLoaded = useRef(false);
   const saveTimer = useRef<number | null>(null);
+  const saveInFlight = useRef(false);
+  const saveAgain = useRef(false);
   const latestSnapshot = useRef<AppSnapshot | null>(null);
   const t = (key: MessageKey) => translate(settings.language, key);
 
@@ -250,9 +252,25 @@ function App() {
     if (!stateLoaded.current || saveTimer.current !== null) return;
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
-      if (latestSnapshot.current) {
-        void invoke("save_app_state", { snapshot: latestSnapshot.current }).catch((cause) => setError(String(cause)));
+      if (saveInFlight.current) {
+        saveAgain.current = true;
+        return;
       }
+      saveInFlight.current = true;
+      void (async () => {
+        try {
+          do {
+            saveAgain.current = false;
+            if (latestSnapshot.current) {
+              await invoke("save_app_state", { snapshot: latestSnapshot.current });
+            }
+          } while (saveAgain.current);
+        } catch (cause) {
+          setError(String(cause));
+        } finally {
+          saveInFlight.current = false;
+        }
+      })();
     }, 500);
   }, [downloads, settings]);
 
