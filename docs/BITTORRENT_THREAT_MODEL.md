@@ -63,10 +63,10 @@ peers, or addresses aimed at local services.
 - Reject duplicate normalized paths and any file path that is a strict component-prefix of another
   file path before allocation or reservation.
 - Before allocation, derive every destination, partial, state, temporary, merge, and piece-staging
-  path for the complete selection. Apply the same platform-aware normalization and alias checks to
-  this combined namespace, reject any destination/artifact or artifact/artifact intersection, and
-  reserve the entire namespace for the batch so a name such as `video.quiver-part` cannot alias
-  another file's recovery path.
+  path for the complete selection. Apply every component, encoded full-path length, platform-aware
+  normalization, and alias check to each derived path in this combined namespace; reject overlong
+  paths and any destination/artifact or artifact/artifact intersection, then reserve the entire
+  namespace for the batch so `video.quiver-part` cannot alias another file's recovery path.
 - Resolve every file beneath one canonical user-selected root. Reject symbolic-link semantics,
   padding-file surprises, special files, and any write that escapes or aliases another target.
 - Retain a trusted root directory handle and perform no-follow, handle-relative traversal and

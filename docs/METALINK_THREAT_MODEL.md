@@ -90,10 +90,10 @@ QuiverDL applies stricter platform-aware containment:
 - When a component already exists, compare stable filesystem identity obtained from the no-follow
   handle so short-name or filesystem-specific aliases cannot make two batch paths share a target.
 - Before starting, derive every destination, partial, state, temporary, merge, and segment path for
-  the full batch. Apply the same platform-aware normalization and alias checks to this combined
-  namespace, reject every destination/artifact or artifact/artifact intersection, and only then
-  reserve the namespace. Use the existing no-replace promotion and preserve recoverable partials
-  after ordinary interruption.
+  the full batch. Apply every component, encoded full-path length, platform-aware normalization, and
+  alias check to each derived path in this combined namespace; reject overlong paths and every
+  destination/artifact or artifact/artifact intersection, then reserve the namespace. Use the
+  existing no-replace promotion and preserve recoverable partials after ordinary interruption.
 - Do not implement Metalink-declared symbolic links, hard links, permissions, or executable bits.
 
 ## Network and integrity boundary
