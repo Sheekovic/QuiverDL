@@ -1,4 +1,4 @@
-import { lstat, readFile, rename, writeFile } from "node:fs/promises";
+import { link, lstat, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -12,24 +12,15 @@ const MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_SIGNATURE_BYTES = 16 * 1024;
 
 function parseVersion(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/.exec(version);
-  if (!match) {
+  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
     throw new Error(`Invalid release SemVer: ${version}`);
   }
-  if (match[4]) {
-    const identifiers = match[4].split(".");
-    if (
-      identifiers.some(
-        (identifier) =>
-          !identifier ||
-          !/^[0-9A-Za-z-]+$/.test(identifier) ||
-          (/^\d+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0")),
-      )
-    ) {
-      throw new Error(`Invalid release SemVer prerelease identifiers: ${version}`);
-    }
-  }
   return version;
+}
+
+function pathKey(value) {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
 }
 
 function validateBaseUrl(value, version) {
@@ -88,10 +79,7 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
   if (keys.join("\n") !== SUPPORTED_PLATFORMS.join("\n")) {
     throw new Error(`Artifacts must include exactly: ${SUPPORTED_PLATFORMS.join(", ")}`);
   }
-  const pathKeys = keys.map((platform) => {
-    const resolved = path.resolve(artifacts[platform]);
-    return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved;
-  });
+  const pathKeys = keys.map((platform) => pathKey(artifacts[platform]));
   if (new Set(pathKeys).size !== pathKeys.length) {
     throw new Error("Each platform must use a distinct updater artifact path");
   }
@@ -109,6 +97,33 @@ export async function generateManifest({ version, baseUrl, artifacts }) {
     notes: `QuiverDL ${version}. Verify the release notes before installing.`,
     platforms,
   };
+}
+
+export async function writeNewManifest(output, bytes, artifacts) {
+  const outputKey = pathKey(output);
+  const protectedPaths = Object.values(artifacts).flatMap((artifact) => [
+    pathKey(artifact),
+    pathKey(`${artifact}.sig`),
+  ]);
+  if (protectedPaths.includes(outputKey)) {
+    throw new Error("Manifest output must not alias an artifact or signature");
+  }
+  try {
+    await lstat(output);
+    throw new Error(`Refusing to overwrite existing manifest output: ${output}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const temporary = `${output}.tmp-${process.pid}`;
+  await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+  try {
+    await link(temporary, output);
+  } finally {
+    await unlink(temporary).catch(() => {});
+  }
 }
 
 function parseArguments(arguments_) {
@@ -149,9 +164,7 @@ async function main() {
   const output = path.resolve(options.output);
   const manifest = await generateManifest(options);
   const bytes = `${JSON.stringify(manifest, null, 2)}\n`;
-  const temporary = `${output}.tmp-${process.pid}`;
-  await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
-  await rename(temporary, output);
+  await writeNewManifest(output, bytes, options.artifacts);
   process.stdout.write(`Created ${output}\n`);
 }
 

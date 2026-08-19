@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { generateManifest } from "./generate-update-manifest.mjs";
+import { generateManifest, writeNewManifest } from "./generate-update-manifest.mjs";
 
 const platforms = ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"];
 
@@ -62,19 +62,35 @@ test("rejects insecure origins and incomplete platform sets", async () => {
   }
 });
 
-test("rejects invalid prereleases and duplicate platform artifacts", async () => {
+test("rejects prereleases and duplicate platform artifacts", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
   try {
     const artifacts = await fixture(directory);
     const baseUrl = "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3";
     await assert.rejects(
-      generateManifest({ version: "1.2.3-01", baseUrl, artifacts }),
-      /prerelease identifiers/,
+      generateManifest({ version: "1.2.3-beta.1", baseUrl, artifacts }),
+      /Invalid release SemVer/,
     );
     artifacts["linux-x86_64"] = artifacts["windows-x86_64"];
     await assert.rejects(
       generateManifest({ version: "1.2.3", baseUrl, artifacts }),
       /distinct updater artifact path/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("creates manifest output once without aliasing signed inputs", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const artifacts = await fixture(directory);
+    const output = path.join(directory, "latest.json");
+    await writeNewManifest(output, "{}\n", artifacts);
+    await assert.rejects(writeNewManifest(output, "{}\n", artifacts), /Refusing to overwrite/);
+    await assert.rejects(
+      writeNewManifest(artifacts["linux-x86_64"], "{}\n", artifacts),
+      /must not alias/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

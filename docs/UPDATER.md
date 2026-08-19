@@ -34,7 +34,9 @@ updater.
 `scripts/generate-update-manifest.mjs` accepts exactly the four supported platform artifacts, reads
 each sibling `.sig`, and emits deterministic Tauri static JSON. It rejects symlinks, empty or
 oversized artifacts/signatures, unexpected platforms, unsafe filenames, non-SemVer versions, tag
-mismatches, credentials, HTTP, query strings, fragments, and any release URL outside this repository.
+mismatches, credentials, HTTP, query strings, fragments, duplicate platform paths/URLs, existing or
+artifact-aliased output paths, and any release URL outside this repository. Stable manifests reject
+prerelease versions until a separately named, tested, and published prerelease channel exists.
 
 Example after all signed artifacts have reached draft release `v0.2.0`:
 
