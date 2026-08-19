@@ -20,6 +20,8 @@ node scripts/package-extensions.mjs
 
 Upload the Chromium ZIP through the Chrome Web Store developer dashboard. Upload the Firefox ZIP
 through addons.mozilla.org or sign it with `web-ext sign`; an unsigned ZIP is not a production XPI.
+The owner must also supply the marketplace listing assets outside the ZIP, including the required
+Chrome screenshot and promotional tile, and keep the homepage and privacy-policy URLs current.
 Before publishing, set the final Chromium store ID in the native-host allowlist, rebuild the native
 host packages, test explicit pairing, and confirm that the store privacy disclosures match
 `docs/privacy/index.html`. QuiverDL never supplies cookies, headers, page contents, history, or
@@ -59,20 +61,24 @@ strictly confined Snap, and declares only desktop integration, outbound network,
 removable-media, and single-instance D-Bus access. Removable-media access is not silently granted by
 the package and may require the user to connect that interface. Browser native-messaging
 registration remains a direct-package feature because strict confinement cannot write arbitrary
-browser profile locations.
+browser profile locations. Authenticated proxy credentials use Secret Service through the declared
+`password-manager-service` interface; if the Store does not auto-connect it, the user must approve
+that connection before saving a proxy password.
 
 Build and test on Ubuntu before owner publication:
 
 ```bash
 snapcraft
 sudo snap install --dangerous ./quiverdl_0.1.0_amd64.snap
+sudo snap connect quiverdl:password-manager-service
 snap connections quiverdl
 snap run quiverdl
 ```
 
 Exercise downloads to the home directory, denied destinations, interruption/restart, notifications,
-single-instance behavior, and an explicitly connected removable drive. After registering the name,
-the owner can upload the tested artifact with `snapcraft upload --release=stable <artifact>.snap`.
+single-instance behavior, authenticated-proxy credential save/load, and an explicitly connected
+removable drive. After registering the name, the owner can upload the tested artifact with
+`snapcraft upload --release=stable <artifact>.snap`.
 
 ## Mac App Store status
 

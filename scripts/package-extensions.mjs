@@ -115,6 +115,9 @@ function validateManifest(browser, manifest) {
   if (!manifest.description || manifest.description.length > 132) {
     throw new Error(`${browser}: description must contain 1-132 characters`);
   }
+  if (manifest.icons?.["128"] !== "icons/icon-128.png") {
+    throw new Error(`${browser}: the store manifest must declare icons/icon-128.png at 128px`);
+  }
   if (browser === "firefox") {
     const gecko = manifest.browser_specific_settings?.gecko;
     if (!gecko?.id) {
@@ -143,7 +146,19 @@ export async function packageExtension(source, destination, browser) {
     const data = await readFile(path.join(source, ...name.split("/")));
     entries.push({ name, data });
   }
-  validateManifest(browser, JSON.parse(entries.find((entry) => entry.name === "manifest.json").data));
+  const manifest = JSON.parse(entries.find((entry) => entry.name === "manifest.json").data);
+  validateManifest(browser, manifest);
+  const icon = entries.find((entry) => entry.name === manifest.icons["128"]);
+  const pngSignature = "89504e470d0a1a0a";
+  if (
+    !icon ||
+    icon.data.length < 24 ||
+    icon.data.subarray(0, 8).toString("hex") !== pngSignature ||
+    icon.data.readUInt32BE(16) !== 128 ||
+    icon.data.readUInt32BE(20) !== 128
+  ) {
+    throw new Error(`${browser}: icons/icon-128.png must be a 128x128 PNG`);
+  }
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, createStoredZip(entries));
   return { destination, files: files.length };

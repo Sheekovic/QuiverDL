@@ -50,5 +50,6 @@ assert.match(
 assert.match(snapcraft, /^confinement: strict$/m);
 assert.match(snapcraft, /^\s+- home$/m);
 assert.match(snapcraft, /^\s+- network$/m);
+assert.match(snapcraft, /^\s+- password-manager-service$/m);
 
 process.stdout.write("Store packaging configuration is internally consistent.\n");

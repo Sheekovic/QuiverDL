@@ -17,6 +17,7 @@ apps:
       - home
       - network
       - network-status
+      - password-manager-service
       - removable-media
       - quiverdl-single-instance
     slots:
