@@ -83,6 +83,37 @@ async fn downloads_and_merges_validated_parallel_segments() {
 }
 
 #[tokio::test]
+async fn applies_the_per_host_cap_before_probe_connections_open() {
+    let (url, server) = probe_cap_fixture_server().await;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let engine = DownloadEngine::new().expect("engine should initialize");
+    let policy = TransferPolicy {
+        max_segments: 1,
+        max_connections_per_host: 1,
+        min_segment_bytes: 1024 * 1024,
+        per_download_speed_limit_bps: None,
+    };
+    let mut first = DownloadRequest::new(url.clone(), directory.path().join("first.bin"));
+    first.transfer_policy = policy;
+    let mut second = DownloadRequest::new(url, directory.path().join("second.bin"));
+    second.transfer_policy = policy;
+    let (first_progress, first_receiver) = mpsc::channel::<ProgressEvent>(16);
+    let (second_progress, second_receiver) = mpsc::channel::<ProgressEvent>(16);
+    drop((first_receiver, second_receiver));
+
+    let first_engine = engine.clone();
+    let (first_result, second_result, server_result) = tokio::join!(
+        first_engine.download(first, DownloadControl::new(), first_progress,),
+        engine.download(second, DownloadControl::new(), second_progress,),
+        server,
+    );
+
+    first_result.expect("first capped download should succeed");
+    second_result.expect("second capped download should succeed");
+    server_result.expect("probe-cap fixture server should finish");
+}
+
+#[tokio::test]
 async fn invalidates_completed_segments_after_checksum_mismatch() {
     let (url, server, _fixture) = segmented_fixture_server().await;
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -445,6 +476,66 @@ async fn segmented_fixture_server() -> (Url, tokio::task::JoinHandle<()>, Arc<Ve
         task,
         fixture,
     )
+}
+
+async fn probe_cap_fixture_server() -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("fixture server should bind");
+    let address = listener.local_addr().expect("fixture address");
+    let task = tokio::spawn(async move {
+        let (mut first_socket, _) = listener.accept().await.expect("first probe should arrive");
+        let mut request = vec![0_u8; 4096];
+        let count = first_socket
+            .read(&mut request)
+            .await
+            .expect("first probe should read");
+        let first_request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+        assert!(first_request.contains("range: bytes=0-0"));
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "a second connection opened while the first probe held the per-host permit"
+        );
+        write_fixture_response(&mut first_socket, &first_request).await;
+
+        for _ in 0..3 {
+            let (mut socket, _) = listener.accept().await.expect("request should arrive");
+            let mut request = vec![0_u8; 4096];
+            let count = socket
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            let request = String::from_utf8_lossy(&request[..count]).to_ascii_lowercase();
+            write_fixture_response(&mut socket, &request).await;
+        }
+    });
+    (
+        Url::parse(&format!("http://{address}/capped.bin")).expect("fixture URL"),
+        task,
+    )
+}
+
+async fn write_fixture_response(socket: &mut tokio::net::TcpStream, request: &str) {
+    let response = if request.contains("range: bytes=0-0") {
+        format!(
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nContent-Range: bytes 0-0/{}\r\nAccept-Ranges: bytes\r\nETag: cap-v1\r\nConnection: close\r\n\r\n{}",
+            FIXTURE.len(), FIXTURE[0] as char
+        )
+        .into_bytes()
+    } else {
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nETag: cap-v1\r\nConnection: close\r\n\r\n",
+            FIXTURE.len()
+        );
+        [headers.as_bytes(), FIXTURE].concat()
+    };
+    socket
+        .write_all(&response)
+        .await
+        .expect("response should write");
+    socket.shutdown().await.expect("socket should close");
 }
 
 async fn transient_fixture_server() -> (Url, tokio::task::JoinHandle<()>) {

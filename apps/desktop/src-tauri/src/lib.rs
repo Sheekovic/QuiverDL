@@ -126,9 +126,6 @@ async fn start_download(
     let destination = prepare_destination(&destination).await?;
     let settings = settings.unwrap_or_default();
     settings.validate()?;
-    registry
-        .global_limiter
-        .set_bytes_per_second(settings.global_speed_limit_bps.unwrap_or(0));
     let engine = DownloadEngine::new()
         .map_err(|error| error.to_string())?
         .with_global_limiter(Some(registry.global_limiter.clone()))

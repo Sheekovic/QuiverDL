@@ -166,10 +166,19 @@ impl DownloadEngine {
         ensure_destination(&request.destination, request.overwrite_existing).await?;
         emit(&progress, &request, DownloadStatus::Probing, 0, None).await;
 
+        let transfer_policy = request.transfer_policy.normalized();
+        let probe_permit = tokio::select! {
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            permit = self.host_policy.acquire(
+                &request.url,
+                transfer_policy.max_connections_per_host,
+            ) => permit,
+        };
         let probe = tokio::select! {
             _ = control.cancelled() => return Err(Error::Cancelled),
             probe = self.probe(&request.url) => probe?,
         };
+        drop(probe_permit);
         let partial_path = sibling_with_suffix(&request.destination, ".quiver-part");
         let state_path = sibling_with_suffix(&request.destination, ".quiver.json");
         let previous = state::load(&state_path).await?;
@@ -180,7 +189,6 @@ impl DownloadEngine {
             offset = 0;
         }
 
-        let transfer_policy = request.transfer_policy.normalized();
         let ranges = if offset == 0
             && let Some(total) = probe.total_bytes
             && probe.supports_ranges

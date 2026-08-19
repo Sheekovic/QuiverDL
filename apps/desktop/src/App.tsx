@@ -459,6 +459,8 @@ function App() {
       recoverable: false,
     };
     if (browserRequestId) {
+      setDownloads((current) => [item, ...current.filter((existing) => existing.id !== item.id)]);
+      setFilter("all");
       const { recoverable: _recoverable, ...storedItem } = item;
       const currentSnapshot = latestSnapshot.current ?? {
         schemaVersion: 1,
@@ -484,16 +486,18 @@ function App() {
       try {
         await persistSnapshotNow(snapshot);
       } catch (cause) {
+        setDownloads((current) => current.filter((existing) => existing.id !== item.id));
         setError(`Could not durably queue the browser download: ${String(cause)}`);
         return;
       }
+    } else {
+      setDownloads((current) =>
+        existingId
+          ? current.map((existing) => (existing.id === existingId ? item : existing))
+          : [item, ...current],
+      );
+      setFilter("all");
     }
-    setDownloads((current) =>
-      existingId
-        ? current.map((existing) => (existing.id === existingId ? item : existing))
-        : [item, ...current.filter((existing) => existing.id !== item.id)],
-    );
-    setFilter("all");
 
     if (browserRequestId) {
       try {
