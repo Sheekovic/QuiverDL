@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "category": "Utility",
+    "macOS": {
+      "entitlements": "./store/Entitlements.plist",
+      "files": {
+        "embedded.provisionprofile": "./store/embedded.provisionprofile"
+      }
+    }
+  }
+}

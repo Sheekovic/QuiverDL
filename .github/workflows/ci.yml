@@ -71,6 +71,9 @@ jobs:
           sh -n ../../extensions/native-host/install-linux.sh
           sh -n ../../extensions/native-host/install-macos.sh
           ../../extensions/native-host/test-installers.sh
+          node ../../scripts/validate-store-packaging.mjs
+          node --test ../../scripts/test-package-extensions.mjs
+          node ../../scripts/package-extensions.mjs ../../dist/store
 
   desktop-check:
     name: Desktop Rust check
