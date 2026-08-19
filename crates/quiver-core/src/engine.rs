@@ -136,6 +136,9 @@ impl DownloadEngine {
                 "server refused a validated resume request".into(),
             ));
         }
+        if offset > 0 {
+            validate_resume_range(response.headers(), offset, probe.total_bytes)?;
+        }
         if offset == 0 && !response.status().is_success() {
             return Err(Error::InvalidResponse(format!(
                 "download returned HTTP {}",
@@ -301,8 +304,71 @@ fn header_string(value: Option<&reqwest::header::HeaderValue>) -> Option<String>
     value?.to_str().ok().map(ToOwned::to_owned)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRange {
+    start: u64,
+    end: u64,
+    total: Option<u64>,
+}
+
+fn parse_content_range(value: &str) -> Option<ContentRange> {
+    let (unit, value) = value.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+
+    let (range, total) = value.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let start = start.parse().ok()?;
+    let end = end.parse().ok()?;
+    if start > end {
+        return None;
+    }
+
+    let total = match total {
+        "*" => None,
+        value => Some(value.parse().ok()?),
+    };
+    if total.is_some_and(|total| end >= total) {
+        return None;
+    }
+
+    Some(ContentRange { start, end, total })
+}
+
 fn parse_content_range_total(value: &str) -> Option<u64> {
-    value.rsplit_once('/')?.1.parse().ok()
+    parse_content_range(value)?.total
+}
+
+fn validate_resume_range(
+    headers: &reqwest::header::HeaderMap,
+    expected_start: u64,
+    expected_total: Option<u64>,
+) -> Result<()> {
+    let value = headers
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_content_range)
+        .ok_or_else(|| {
+            Error::InvalidResponse("resume response has no valid Content-Range".into())
+        })?;
+
+    if value.start != expected_start {
+        return Err(Error::InvalidResponse(format!(
+            "resume response started at byte {} instead of {expected_start}",
+            value.start
+        )));
+    }
+    if let Some(expected_total) = expected_total
+        && value.total != Some(expected_total)
+    {
+        return Err(Error::InvalidResponse(format!(
+            "resume response total {:?} did not match expected total {expected_total}",
+            value.total
+        )));
+    }
+
+    Ok(())
 }
 
 async fn file_len(path: &Path) -> Result<u64> {
@@ -333,7 +399,9 @@ mod tests {
 
     use url::Url;
 
-    use super::{ProbeResult, can_resume, parse_content_range_total};
+    use super::{
+        ContentRange, ProbeResult, can_resume, parse_content_range, parse_content_range_total,
+    };
     use crate::{DownloadRequest, state::PartialState};
 
     #[test]
@@ -341,6 +409,21 @@ mod tests {
         assert_eq!(parse_content_range_total("bytes 0-0/4096"), Some(4096));
         assert_eq!(parse_content_range_total("broken"), None);
         assert_eq!(parse_content_range_total("bytes 0-0/*"), None);
+    }
+
+    #[test]
+    fn parses_and_rejects_invalid_content_ranges() {
+        assert_eq!(
+            parse_content_range("bytes 42-99/100"),
+            Some(ContentRange {
+                start: 42,
+                end: 99,
+                total: Some(100),
+            })
+        );
+        assert_eq!(parse_content_range("items 0-1/2"), None);
+        assert_eq!(parse_content_range("bytes 9-4/10"), None);
+        assert_eq!(parse_content_range("bytes 0-10/10"), None);
     }
 
     #[test]
