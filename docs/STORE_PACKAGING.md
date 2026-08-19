@@ -34,7 +34,9 @@ requests.
 ## Microsoft Store
 
 QuiverDL has a dedicated full-trust x64 MSIX package for Microsoft Store submission. Its manifest is
-bound to the public Partner Center identity:
+bound to the public Partner Center identity. The Store package requires Windows 11 because WebView2
+is part of that operating system; Windows 10 users remain supported by the direct EXE/MSI packages,
+which provision the Evergreen WebView2 Runtime:
 
 - Package identity: `SHEEKOVIC.QuiverDL`
 - Publisher: `CN=BC484461-F987-4E7B-82B4-47D7995725CA`
