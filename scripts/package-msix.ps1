@@ -61,7 +61,11 @@ foreach ($part in $versionParts) {
         throw 'Each MSIX version component must be between 0 and 65535.'
     }
 }
-$msixVersion = "$($versionParts[0]).$($versionParts[1]).$($versionParts[2]).0"
+if ($versionParts[0] -ge 65535) {
+    throw 'The desktop major version is too large for the Microsoft Store version mapping.'
+}
+$storeMajorVersion = $versionParts[0] + 1
+$msixVersion = "$storeMajorVersion.$($versionParts[1]).$($versionParts[2]).0"
 
 $sdkRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'
 $makeAppx = Get-ChildItem -Path (Join-Path $sdkRoot '*\x64\makeappx.exe') -ErrorAction SilentlyContinue |

@@ -54,6 +54,8 @@ npm ci --prefix apps/desktop
 The script builds the Tauri executable, renders the reserved four-part Store version, packages it
 with the required assets, asks MakeAppx to perform semantic validation, unpacks the result, and
 checks that the packaged executable has the same SHA-256 hash. The result is written to `dist/store`.
+Microsoft requires a nonzero package major version, so the monotonic mapping adds one to QuiverDL's
+SemVer major: desktop `0.1.0` becomes Store package `1.1.0.0`, while `1.0.0` becomes `2.0.0.0`.
 It is intentionally unsigned: Partner Center accepts an unsigned MSIX and Microsoft signs the
 certified package for Store distribution. Upload the `.msix` under **Packages** in the app submission;
 do not use the PFN, Package SID, or Store ID as signing secrets.
