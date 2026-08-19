@@ -2,11 +2,15 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use tokio::{io::AsyncWriteExt, sync::Mutex};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::Mutex,
+};
 use url::Url;
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_DOWNLOADS: usize = 10_000;
+const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
 pub(crate) struct PersistentStore {
     path: PathBuf,
@@ -194,8 +198,9 @@ pub(crate) async fn load_app_state(
     store: State<'_, PersistentStore>,
 ) -> Result<AppSnapshot, String> {
     let _guard = store.gate.lock().await;
-    let bytes = match tokio::fs::read(&store.path).await {
-        Ok(bytes) => bytes,
+    let bytes = match read_bounded_regular_file(&store.path).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(AppSnapshot::default()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(AppSnapshot::default());
         }
@@ -225,6 +230,9 @@ pub(crate) async fn save_app_state(
     snapshot.validate()?;
     let bytes = serde_json::to_vec_pretty(&snapshot)
         .map_err(|error| format!("Could not encode the queue: {error}"))?;
+    if bytes.len() as u64 > MAX_STATE_BYTES {
+        return Err("The saved queue exceeds the supported size".into());
+    }
     let _guard = store.gate.lock().await;
     let parent = store
         .path
@@ -243,7 +251,7 @@ pub(crate) async fn save_app_state(
             })?;
     }
     let temporary = store.path.with_extension("json.tmp");
-    let mut file = tokio::fs::File::create(&temporary)
+    let mut file = open_private_regular_file(&temporary)
         .await
         .map_err(|error| format!("Could not create the queue file: {error}"))?;
     #[cfg(unix)]
@@ -266,6 +274,61 @@ pub(crate) async fn save_app_state(
         .map_err(|error| format!("Queue commit task failed: {error}"))?
         .map_err(|error| format!("Could not commit the queue file: {error}"))?;
     Ok(())
+}
+
+async fn open_private_regular_file(path: &Path) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).await?;
+    if !file.metadata().await?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "queue path is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+async fn read_bounded_regular_file(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    #[cfg(windows)]
+    options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = match options.open(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "queue path is not a regular file",
+        ));
+    }
+    if metadata.len() > MAX_STATE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "saved queue exceeds the supported size",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_STATE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > MAX_STATE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "saved queue exceeds the supported size",
+        ));
+    }
+    Ok(Some(bytes))
 }
 
 #[cfg(windows)]
@@ -309,7 +372,7 @@ pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> std::io::Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, AppSnapshot};
+    use super::{AppSettings, AppSnapshot, MAX_STATE_BYTES};
 
     #[test]
     fn defaults_are_valid_and_private() {
@@ -327,5 +390,39 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_an_oversized_queue_before_reading_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("state.json");
+        let file = std::fs::File::create(&path).expect("state file");
+        file.set_len(MAX_STATE_BYTES + 1)
+            .expect("sparse state file");
+
+        let error = super::read_bounded_regular_file(&path)
+            .await
+            .expect_err("oversized queues must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queue_temp_write_does_not_follow_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("unrelated");
+        let temporary = directory.path().join("state.json.tmp");
+        tokio::fs::write(&target, b"preserve me")
+            .await
+            .expect("target should write");
+        symlink(&target, &temporary).expect("symlink should be created");
+
+        assert!(super::open_private_regular_file(&temporary).await.is_err());
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"preserve me"
+        );
     }
 }

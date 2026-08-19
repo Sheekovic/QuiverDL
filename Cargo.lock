@@ -2837,6 +2837,7 @@ dependencies = [
  "hex",
  "quiver-core",
  "rand 0.9.5",
+ "rustix",
  "serde",
  "serde_json",
  "tauri",
