@@ -120,8 +120,8 @@ function validateManifest(browser, manifest) {
   }
   if (browser === "firefox") {
     const gecko = manifest.browser_specific_settings?.gecko;
-    if (!gecko?.id) {
-      throw new Error("firefox: browser_specific_settings.gecko.id is required for signing");
+    if (gecko?.id !== "quiverdl@quiverdl.app") {
+      throw new Error("firefox: the signed package must use the native host's stable Gecko ID");
     }
     if (
       gecko.data_collection_permissions?.required?.length !== 1 ||

@@ -16,6 +16,7 @@ const microsoft = await readJson(
 );
 const chromium = await readJson("extensions", "chromium", "manifest.json");
 const firefox = await readJson("extensions", "firefox", "manifest.json");
+const firefoxHost = await readJson("extensions", "native-host", "firefox-host.json");
 const cargoWorkspace = await readFile(path.join(repository, "Cargo.toml"), "utf8");
 const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
 
@@ -29,7 +30,16 @@ assert.match(
   new RegExp(`\\[workspace\\.package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
   "Cargo workspace and Tauri versions must match",
 );
-assert.ok(firefox.browser_specific_settings?.gecko?.id, "Firefox signing requires a stable add-on ID");
+assert.equal(
+  firefox.browser_specific_settings?.gecko?.id,
+  "quiverdl@quiverdl.app",
+  "Firefox signing requires QuiverDL's stable add-on ID",
+);
+assert.deepEqual(
+  firefoxHost.allowed_extensions,
+  [firefox.browser_specific_settings.gecko.id],
+  "Firefox package and native-host allowlist IDs must match exactly",
+);
 assert.equal(
   firefox.browser_specific_settings.gecko.strict_min_version,
   "140.0",
@@ -51,5 +61,13 @@ assert.match(snapcraft, /^confinement: strict$/m);
 assert.match(snapcraft, /^\s+- home$/m);
 assert.match(snapcraft, /^\s+- network$/m);
 assert.match(snapcraft, /^\s+- password-manager-service$/m);
+
+if (process.env.GITHUB_REF_TYPE === "tag") {
+  assert.equal(
+    process.env.GITHUB_REF_NAME,
+    `v${desktop.version}`,
+    "Release tag and store package version must match exactly",
+  );
+}
 
 process.stdout.write("Store packaging configuration is internally consistent.\n");

@@ -94,4 +94,5 @@ remain supported.
 For every marketplace, keep desktop, Chromium, and Firefox versions equal; validate the submitted
 hash against the draft release; test a clean install and an upgrade from the previous public
 version; and retain the marketplace review result. A rejected or unsigned artifact never replaces a
-working direct-download release.
+working direct-download release. The tagged workflow also rejects a tag whose normalized version
+does not exactly match the validated desktop and extension versions.
