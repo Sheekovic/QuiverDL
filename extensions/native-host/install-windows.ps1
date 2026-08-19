@@ -7,6 +7,11 @@ param(
 $resolvedHost = (Resolve-Path -LiteralPath $HostPath).Path
 $installDirectory = Join-Path $env:LOCALAPPDATA "QuiverDL\NativeMessaging"
 New-Item -ItemType Directory -Force -Path $installDirectory | Out-Null
+$installedHostPath = Join-Path $installDirectory ("quiver-native-host" + [IO.Path]::GetExtension($resolvedHost))
+if (-not $resolvedHost.Equals($installedHostPath, [StringComparison]::OrdinalIgnoreCase)) {
+  Copy-Item -Force -LiteralPath $resolvedHost -Destination $installedHostPath
+}
+$resolvedHost = (Resolve-Path -LiteralPath $installedHostPath).Path
 
 $chromiumManifestPath = Join-Path $installDirectory "app.quiverdl.native.chromium.json"
 $chromiumManifest = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot "chromium-host.json") | ConvertFrom-Json

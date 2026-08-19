@@ -18,6 +18,10 @@ try {
     -RegistryBase $registryBase
 
   $installDirectory = Join-Path $env:LOCALAPPDATA "QuiverDL\NativeMessaging"
+  $installedHostPath = Join-Path $installDirectory "quiver-native-host.exe"
+  if (-not (Test-Path -LiteralPath $installedHostPath -PathType Leaf)) {
+    throw "The native messaging host was not copied into its durable install directory"
+  }
   $expectations = @(
     @("Google\Chrome\NativeMessagingHosts\app.quiverdl.native", "app.quiverdl.native.chromium.json"),
     @("Microsoft\Edge\NativeMessagingHosts\app.quiverdl.native", "app.quiverdl.native.chromium.json"),
@@ -30,7 +34,7 @@ try {
       throw "Native messaging registry value is incorrect: $key"
     }
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    if ($manifest.path -ne (Resolve-Path -LiteralPath $hostPath).Path) {
+    if ($manifest.path -ne (Resolve-Path -LiteralPath $installedHostPath).Path) {
       throw "Native messaging host path is incorrect: $manifestPath"
     }
   }
