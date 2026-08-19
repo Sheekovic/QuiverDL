@@ -13,8 +13,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate release identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Require tag, desktop, extension, and store versions to match
+        run: node scripts/validate-store-packaging.mjs
+
   desktop:
     name: ${{ matrix.name }}
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -209,3 +221,24 @@ jobs:
           archive_name=$(basename "$archive")
           (cd "$archive_dir" && shasum -a 256 "$archive_name") > "$archive.sha256"
           gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber
+
+  browser-extensions:
+    name: Browser store submission archives
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Validate and package browser companions
+        run: |
+          node scripts/validate-store-packaging.mjs
+          node --test scripts/test-package-extensions.mjs
+          node scripts/package-extensions.mjs dist/store
+          cd dist/store
+          sha256sum *.zip > SHA256SUMS
+      - name: Attach unsigned store submission archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" dist/store/*.zip dist/store/SHA256SUMS --clobber

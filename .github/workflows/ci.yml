@@ -71,6 +71,9 @@ jobs:
           sh -n ../../extensions/native-host/install-linux.sh
           sh -n ../../extensions/native-host/install-macos.sh
           ../../extensions/native-host/test-installers.sh
+          node ../../scripts/validate-store-packaging.mjs
+          node --test ../../scripts/test-package-extensions.mjs
+          node ../../scripts/package-extensions.mjs ../../dist/store
 
   desktop-check:
     name: Desktop Rust check
@@ -88,6 +91,17 @@ jobs:
       - name: Test Windows native host installer
         shell: powershell
         run: .\extensions\native-host\test-install-windows.ps1
+      - name: Validate Microsoft Store config script syntax
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path .\scripts\prepare-microsoft-store-config.ps1),
+            [ref] $tokens,
+            [ref] $errors
+          ) | Out-Null
+          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:

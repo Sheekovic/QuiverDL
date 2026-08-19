@@ -12,3 +12,15 @@ The Chromium and Firefox folders are unpacked-development extensions. Both defau
 The extension sends only the selected download URL and an optional filename. It never forwards cookies, authorization headers, page contents, browsing history, or telemetry. Browser requests remain in a local inbox until the user reviews them in QuiverDL.
 
 Production store packages must replace the Chromium extension ID in the native-host allowlist. The macOS installer registers the host for per-user Chrome, Chrome for Testing, Chromium, and Firefox profiles.
+
+## Store submission archives
+
+Run `node scripts/package-extensions.mjs` from the repository root to create deterministic Chromium
+and Firefox ZIP files under `dist/store`. The script rejects symlinks, validates the store-facing
+manifest fields, fixes archive timestamps and permissions, and places `manifest.json` at the archive
+root. CI builds the archives twice and compares their bytes.
+
+The ZIP files are submission inputs, not directly installable production extensions. Chrome Web
+Store applies its own signature. Firefox packages must be submitted to and signed by Mozilla before
+installation. Marketplace credentials remain with the repository owner and are never accepted by
+pull-request workflows. See [store packaging](../docs/STORE_PACKAGING.md) for the release procedure.
