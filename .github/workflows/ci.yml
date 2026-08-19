@@ -94,17 +94,26 @@ jobs:
       - name: Test Windows native host installer
         shell: powershell
         run: .\extensions\native-host\test-install-windows.ps1
-      - name: Validate Microsoft Store config script syntax
+      - name: Validate Microsoft Store scripts and manifest
         shell: powershell
         run: |
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path .\scripts\prepare-microsoft-store-config.ps1),
-            [ref] $tokens,
-            [ref] $errors
-          ) | Out-Null
-          if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          foreach ($script in @(
+            '.\scripts\prepare-microsoft-store-config.ps1',
+            '.\scripts\package-msix.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref] $tokens,
+              [ref] $errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          }
+          [xml] $manifest = Get-Content -Raw .\packaging\windows\msix\AppxManifest.xml.template
+          if ($manifest.Package.Identity.Name -ne 'SHEEKOVIC.QuiverDL') {
+            throw 'The MSIX manifest identity does not match Partner Center.'
+          }
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -113,3 +122,6 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run workspace tests
         run: cargo test --workspace
+      - name: Build and validate Microsoft Store MSIX
+        shell: powershell
+        run: .\scripts\package-msix.ps1 -OutputDirectory $env:RUNNER_TEMP\store

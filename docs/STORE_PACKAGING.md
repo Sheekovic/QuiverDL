@@ -33,26 +33,39 @@ requests.
 
 ## Microsoft Store
 
-Tauri currently submits a linked offline EXE/MSI installer rather than generating an MSIX. The
-overlay `apps/desktop/src-tauri/tauri.microsoftstore.conf.json` selects the required offline WebView2
-installer and a publisher name distinct from the product name. After importing the owner's
-Authenticode certificate, generate the ignored combined Store/signing overlay and build on Windows:
+QuiverDL has a dedicated full-trust x64 MSIX package for Microsoft Store submission. Its manifest is
+bound to the public Partner Center identity:
+
+- Package identity: `SHEEKOVIC.QuiverDL`
+- Publisher: `CN=BC484461-F987-4E7B-82B4-47D7995725CA`
+- Publisher display name: `SHEEKOVIC`
+- Package family name: `SHEEKOVIC.QuiverDL_x7yre5s1hmnca`
+- Store ID: `9MVB2DD54NF4`
+
+Install the locked frontend dependencies once, then build and validate the package on Windows:
 
 ```powershell
 npm ci --prefix apps/desktop
-$thumbprint = 'REPLACE_WITH_THE_40_HEX_CERTIFICATE_THUMBPRINT'
-.\scripts\prepare-microsoft-store-config.ps1 -CertificateThumbprint $thumbprint
-npm run tauri --prefix apps/desktop -- build --no-bundle
-npm run tauri --prefix apps/desktop -- bundle --bundles nsis,msi --config src-tauri/tauri.microsoftstore.release.conf.json
+.\scripts\package-msix.ps1
 ```
 
-The preparation script validates the certificate's private key, code-signing usage, and expiry, then
-injects its thumbprint, SHA-256 digest, and timestamp service without modifying the tracked overlay.
-Verify every generated executable and MSI with `signtool verify /pa`, test offline
-install/update/uninstall on a clean Windows 11 VM, run the Windows App Certification Kit, upload the
-immutable installer to stable HTTPS hosting, and link that exact URL in Partner Center. MSI/EXE
-Store submissions are not re-signed by Microsoft, so publication remains blocked until the
-repository owner supplies a trusted signing certificate.
+The script builds the Tauri executable, renders the reserved four-part Store version, packages it
+with the required assets, asks MakeAppx to perform semantic validation, unpacks the result, and
+checks that the packaged executable has the same SHA-256 hash. The result is written to `dist/store`.
+It is intentionally unsigned: Partner Center accepts an unsigned MSIX and Microsoft signs the
+certified package for Store distribution. Upload the `.msix` under **Packages** in the app submission;
+do not use the PFN, Package SID, or Store ID as signing secrets.
+
+The **Microsoft Store MSIX** GitHub Actions workflow performs the same build and retains the package
+as a private workflow artifact for 30 days. It can be started manually and also runs for version
+tags. Before submitting, run the Windows App Certification Kit and test Store installation, launch,
+download, resume, and uninstall behavior on a clean Windows 11 VM.
+
+The existing `tauri.microsoftstore.conf.json` and `prepare-microsoft-store-config.ps1` remain only
+for the alternative linked EXE/MSI Store route. That route still needs the owner's Authenticode
+certificate because Microsoft does not re-sign linked installers. Browser native-messaging
+registration is not included in the MSIX: the browser companion remains available with QuiverDL's
+direct Windows packages until an MSIX-compatible registration design is implemented.
 
 ## Snap Store
 
