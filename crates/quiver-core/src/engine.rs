@@ -910,10 +910,10 @@ fn validate_resume_range(
 }
 
 async fn file_len(path: &Path) -> Result<u64> {
-    match tokio::fs::metadata(path).await {
-        Ok(metadata) => Ok(metadata.len()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
-        Err(error) => Err(error.into()),
+    match state::open_regular_file_for_read(path).await {
+        Ok(file) => Ok(file.metadata().await?.len()),
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error),
     }
 }
 
@@ -1010,7 +1010,7 @@ mod tests {
     use url::Url;
 
     use super::{
-        ByteRange, ContentRange, ProbeResult, can_resume, download_segment, emit,
+        ByteRange, ContentRange, ProbeResult, can_resume, download_segment, emit, file_len,
         parse_content_range, parse_content_range_total, plan_segments, status_error,
     };
     use crate::{
@@ -1038,6 +1038,23 @@ mod tests {
         assert_eq!(
             plan_segments(7, 16, 8),
             vec![ByteRange { start: 0, end: 6 }]
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_hard_link_when_measuring_a_resumable_segment() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("unrelated");
+        let segment = directory.path().join("download.segment-0");
+        tokio::fs::write(&target, b"untrusted segment")
+            .await
+            .expect("target should write");
+        std::fs::hard_link(&target, &segment).expect("hard link should be created");
+
+        assert!(file_len(&segment).await.is_err());
+        assert_eq!(
+            tokio::fs::read(target).await.expect("target should read"),
+            b"untrusted segment"
         );
     }
 

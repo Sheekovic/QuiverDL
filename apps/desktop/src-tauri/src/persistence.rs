@@ -198,7 +198,7 @@ pub(crate) async fn load_app_state(
     store: State<'_, PersistentStore>,
 ) -> Result<AppSnapshot, String> {
     let _guard = store.gate.lock().await;
-    let bytes = match read_bounded_regular_file(&store.path).await {
+    let bytes = match read_bounded_regular_file(&store.path, MAX_STATE_BYTES).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return Ok(AppSnapshot::default()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -289,16 +289,14 @@ async fn open_private_regular_file(path: &Path) -> std::io::Result<tokio::fs::Fi
     #[cfg(windows)]
     options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
     let file = options.open(path).await?;
-    if !file.metadata().await?.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "queue path is not a regular file",
-        ));
-    }
+    validate_private_handle(&file).await?;
     Ok(file)
 }
 
-async fn read_bounded_regular_file(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+pub(crate) async fn read_bounded_regular_file(
+    path: &Path,
+    maximum_bytes: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
     let mut options = tokio::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -310,30 +308,63 @@ async fn read_bounded_regular_file(path: &Path) -> std::io::Result<Option<Vec<u8
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    let metadata = file.metadata().await?;
-    if !metadata.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "queue path is not a regular file",
-        ));
-    }
-    if metadata.len() > MAX_STATE_BYTES {
+    let metadata = validate_private_handle(&file).await?;
+    if metadata.len() > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "saved queue exceeds the supported size",
+            "file exceeds the supported size",
         ));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_STATE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() as u64 > MAX_STATE_BYTES {
+    file.take(maximum_bytes + 1).read_to_end(&mut bytes).await?;
+    if bytes.len() as u64 > maximum_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "saved queue exceeds the supported size",
+            "file exceeds the supported size",
         ));
     }
     Ok(Some(bytes))
+}
+
+async fn validate_private_handle(file: &tokio::fs::File) -> std::io::Result<std::fs::Metadata> {
+    let metadata = file.metadata().await?;
+    if !metadata.is_file() || !has_single_link(file, &metadata)? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "private state path is not an exclusively linked regular file",
+        ));
+    }
+    Ok(metadata)
+}
+
+#[cfg(unix)]
+fn has_single_link(_file: &tokio::fs::File, metadata: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(metadata.nlink() == 1)
+}
+
+#[cfg(windows)]
+fn has_single_link(file: &tokio::fs::File, _metadata: &std::fs::Metadata) -> std::io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    let result = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(information.nNumberOfLinks == 1)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn has_single_link(
+    _file: &tokio::fs::File,
+    _metadata: &std::fs::Metadata,
+) -> std::io::Result<bool> {
+    Ok(true)
 }
 
 #[cfg(windows)]
@@ -405,7 +436,7 @@ mod tests {
         file.set_len(MAX_STATE_BYTES + 1)
             .expect("sparse state file");
 
-        let error = super::read_bounded_regular_file(&path)
+        let error = super::read_bounded_regular_file(&path, MAX_STATE_BYTES)
             .await
             .expect_err("oversized queues must fail");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);

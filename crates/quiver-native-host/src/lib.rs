@@ -10,6 +10,7 @@ use url::Url;
 use uuid::Uuid;
 
 const MAX_MESSAGE_BYTES: u32 = 1024 * 1024;
+const MAX_CONFIG_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct BridgeConfig {
@@ -68,6 +69,27 @@ struct InboxRequest {
 #[must_use]
 pub fn default_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|directory| directory.join("QuiverDL").join("native-bridge.json"))
+}
+
+pub fn load_config(path: &Path) -> io::Result<BridgeConfig> {
+    let file = fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native bridge configuration is not a supported regular file",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_CONFIG_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native bridge configuration is too large",
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 pub fn read_message(reader: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
@@ -203,7 +225,10 @@ fn write_inbox_request(inbox: &Path, request: &InboxRequest) -> io::Result<()> {
 mod tests {
     use std::{io::Cursor, path::Path};
 
-    use super::{BridgeConfig, HostResponse, process_message, read_message, write_message};
+    use super::{
+        BridgeConfig, HostResponse, MAX_CONFIG_BYTES, load_config, process_message, read_message,
+        write_message,
+    };
 
     #[test]
     fn validates_bridge_config_against_its_location() {
@@ -250,6 +275,18 @@ mod tests {
             .expect("frame exists");
         let value: serde_json::Value = serde_json::from_slice(&payload).expect("valid JSON");
         assert_eq!(value["requestId"], "fixture");
+    }
+
+    #[test]
+    fn rejects_an_oversized_bridge_config_before_reading_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("native-bridge.json");
+        let file = std::fs::File::create(&path).expect("config file");
+        file.set_len(MAX_CONFIG_BYTES + 1)
+            .expect("sparse config file");
+
+        let error = load_config(&path).expect_err("oversized config must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

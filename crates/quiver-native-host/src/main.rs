@@ -1,7 +1,7 @@
-use std::{fs, io};
+use std::io;
 
 use quiver_native_host::{
-    BridgeConfig, HostResponse, default_config_path, process_message, read_message, write_message,
+    HostResponse, default_config_path, load_config, process_message, read_message, write_message,
 };
 
 fn main() {
@@ -16,7 +16,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(Into::into)
         .or_else(default_config_path)
         .ok_or("could not locate the user configuration directory")?;
-    let config: BridgeConfig = serde_json::from_slice(&fs::read(&config_path)?)?;
+    let config = load_config(&config_path)?;
     config.validate(&config_path)?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

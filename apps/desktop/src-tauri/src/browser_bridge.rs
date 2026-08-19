@@ -5,6 +5,8 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 
 const HOST_NAME: &str = "app.quiverdl.native";
+const MAX_BRIDGE_CONFIG_BYTES: u64 = 16 * 1024;
+const MAX_INBOX_ITEM_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct BridgeConfig {
@@ -38,7 +40,8 @@ fn bridge_directory() -> Result<PathBuf, String> {
 async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
     let directory = bridge_directory()?;
     let path = directory.join("native-bridge.json");
-    if let Ok(bytes) = tokio::fs::read(&path).await
+    if let Ok(Some(bytes)) =
+        super::persistence::read_bounded_regular_file(&path, MAX_BRIDGE_CONFIG_BYTES).await
         && let Ok(config) = serde_json::from_slice::<BridgeConfig>(&bytes)
         && config.token.len() == 64
         && config.token.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -146,7 +149,10 @@ pub(crate) async fn list_browser_requests() -> Result<Vec<BrowserInboxItem>, Str
         {
             continue;
         }
-        let Ok(bytes) = tokio::fs::read(entry.path()).await else {
+        let Ok(Some(bytes)) =
+            super::persistence::read_bounded_regular_file(&entry.path(), MAX_INBOX_ITEM_BYTES)
+                .await
+        else {
             continue;
         };
         let Ok(request) = parse_inbox_item(&bytes) else {
