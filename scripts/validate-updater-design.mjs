@@ -100,6 +100,11 @@ assert.match(releaseWorkflow, /environment: release/);
 assert.match(releaseWorkflow, /VITE_QUIVERDL_UPDATER: "true"/);
 assert.match(releaseWorkflow, /--config src-tauri\/tauri\.updater\.conf\.json/);
 assert.match(releaseWorkflow, /--platform linux-x86_64/);
+assert.match(
+  releaseWorkflow,
+  /GITHUB_REF_NAME="\$RELEASE_TAG" node scripts\/generate-update-manifest\.mjs/,
+  "manual releases must validate the manifest against the trusted release tag, not the dispatch branch",
+);
 assert.match(releaseWorkflow, /workflow_dispatch:\s*\n\s+inputs:\s*\n\s+tag:/);
 assert.match(
   releaseWorkflow,
