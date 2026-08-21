@@ -5,8 +5,10 @@
 [![CI](https://github.com/Sheekovic/QuiverDL/actions/workflows/ci.yml/badge.svg)](https://github.com/Sheekovic/QuiverDL/actions/workflows/ci.yml)
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3%2B-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![Get it from Microsoft](https://img.shields.io/badge/Get_it_from-Microsoft_Store-0078D4?logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9MVB2DD54NF4)
 
 [Website](https://sheekovic.github.io/QuiverDL/) ·
+[Microsoft Store](https://apps.microsoft.com/detail/9MVB2DD54NF4) ·
 [Privacy Policy](https://sheekovic.github.io/QuiverDL/privacy/) ·
 [Roadmap](ROADMAP.md) ·
 [Contributing](CONTRIBUTING.md)
@@ -14,9 +16,18 @@
 QuiverDL is a performance-first, privacy-respecting open-source download manager. It combines a
 native Rust engine with a lightweight Tauri and React desktop application.
 
-> [!IMPORTANT]
-> QuiverDL is pre-release software. The implementation is functional and tested, but the first
-> public signed release still requires repository-owner signing credentials and clean-machine QA.
+> [!TIP]
+> QuiverDL is now available from the
+> [Microsoft Store](https://apps.microsoft.com/detail/9MVB2DD54NF4). Install it there to receive a
+> Microsoft-signed package and Store-managed updates.
+
+## Install on Windows
+
+[Download QuiverDL from the Microsoft Store](https://apps.microsoft.com/detail/9MVB2DD54NF4)
+
+The Microsoft Store is currently the recommended installation method. Direct installer and
+portable downloads from GitHub remain pending independent code-signing credentials and final
+clean-machine validation.
 
 ## Why QuiverDL?
 
@@ -40,7 +51,7 @@ destination.
 Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
 capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
 See the [roadmap](ROADMAP.md), [threat model](docs/THREAT_MODEL.md), and
-[release process](docs/RELEASE.md) for the remaining credential-gated release step. The
+[release process](docs/RELEASE.md) for the remaining direct-distribution signing step. The
 [safe pause and resume guide](docs/RESUME.md) explains when interrupted bytes are reused, restarted,
 or preserved for another retry. The [proxy guide](docs/PROXY.md) explains routing, authentication,
 and privacy boundaries.
