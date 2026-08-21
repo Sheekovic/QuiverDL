@@ -34,7 +34,7 @@ async function fixture(directory) {
       signingKey.privateKey,
     );
     const minisign = [
-      "untrusted comment: signature from minisign secret key",
+      "untrusted comment: signature from tauri secret key",
       packet.toString("base64"),
       `trusted comment: ${trustedComment}`,
       globalSignature.toString("base64"),
