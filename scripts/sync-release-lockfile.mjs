@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repository = path.resolve(
+  process.env.QUIVERDL_RELEASE_REPOSITORY
+    ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+);
 const LOCAL_PACKAGES = ["quiver-core", "quiver-desktop", "quiver-native-host"];
 
 export function syncReleaseLockfile(lockfile, version, packageNames = LOCAL_PACKAGES) {
@@ -22,8 +25,13 @@ export function syncReleaseLockfile(lockfile, version, packageNames = LOCAL_PACK
 }
 
 async function main() {
-  const version = (await readFile(path.join(repository, "version.txt"), "utf8")).trim();
+  const versionPath = path.join(repository, "version.txt");
   const lockfilePath = path.join(repository, "Cargo.lock");
+  for (const [filePath, label] of [[versionPath, "version file"], [lockfilePath, "Cargo lockfile"]]) {
+    const info = await lstat(filePath);
+    assert.ok(info.isFile() && !info.isSymbolicLink(), `${label} must be a regular non-symlink file`);
+  }
+  const version = (await readFile(versionPath, "utf8")).trim();
   const lockfile = await readFile(lockfilePath, "utf8");
   await writeFile(lockfilePath, syncReleaseLockfile(lockfile, version), "utf8");
   process.stdout.write(`Synchronized Cargo.lock workspace packages to ${version}.\n`);

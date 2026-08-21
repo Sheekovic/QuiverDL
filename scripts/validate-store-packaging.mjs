@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repository = path.resolve(
+  process.env.QUIVERDL_RELEASE_REPOSITORY
+    ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+);
 const readJson = async (...parts) => JSON.parse(await readFile(path.join(repository, ...parts), "utf8"));
 
 function tomlSection(document, name) {

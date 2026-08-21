@@ -28,22 +28,32 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Check out trusted release tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.release.outputs.prs_created == 'true'
+        with:
+          path: .trusted-release-tools
+          persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         if: steps.release.outputs.prs_created == 'true'
         with:
           node-version: 22
       - name: Synchronize the generated release lockfile
+        id: synchronize
         if: steps.release.outputs.prs_created == 'true'
         env:
+          QUIVERDL_RELEASE_REPOSITORY: ${{ github.workspace }}
           RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
         shell: bash
         run: |
           [[ "$RELEASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
           [[ "$RELEASE_BRANCH" != /* && "$RELEASE_BRANCH" != *..* ]]
-          node scripts/sync-release-lockfile.mjs
-          node scripts/validate-store-packaging.mjs
+          node .trusted-release-tools/scripts/sync-release-lockfile.mjs
+          node .trusted-release-tools/scripts/validate-store-packaging.mjs
           git add -- Cargo.lock
           if git diff --cached --quiet; then
             echo "Cargo.lock already matches the generated release version."
@@ -51,5 +61,18 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: synchronize release lockfile"
-          git push origin "HEAD:refs/heads/$RELEASE_BRANCH"
+          git -c core.hooksPath=/dev/null commit -m "chore: synchronize release lockfile"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Push the synchronized release branch
+        if: steps.synchronize.outputs.changed == 'true'
+        env:
+          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          test -n "$RELEASE_TOKEN"
+          [[ "$RELEASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
+          [[ "$RELEASE_BRANCH" != /* && "$RELEASE_BRANCH" != *..* ]]
+          git -c core.hooksPath=/dev/null -c credential.helper= push \
+            "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:refs/heads/$RELEASE_BRANCH"

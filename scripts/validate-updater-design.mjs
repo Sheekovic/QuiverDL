@@ -106,4 +106,15 @@ assert.equal(
   "release caches must exclude stale Tauri bundle outputs",
 );
 assert.match(releasePleaseWorkflow, /scripts\/sync-release-lockfile\.mjs/);
+assert.equal(
+  (releasePleaseWorkflow.match(/persist-credentials: false/g) ?? []).length,
+  2,
+  "release and trusted-tool checkouts must not persist push credentials",
+);
+assert.match(releasePleaseWorkflow, /ref: \$\{\{ github\.sha \}\}/);
+assert.equal(
+  (releasePleaseWorkflow.match(/RELEASE_TOKEN:/g) ?? []).length,
+  1,
+  "the reusable release token must exist only in the final push step",
+);
 process.stdout.write("Updater design is fail-closed and uses the canonical HTTPS endpoint.\n");
