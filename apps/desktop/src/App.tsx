@@ -337,11 +337,11 @@ function App() {
   const saveAgain = useRef(false);
   const latestSnapshot = useRef<AppSnapshot | null>(null);
   const quitInProgress = useRef(false);
-  const updaterCheckInFlight = useRef(false);
+  const updaterOperation = useRef<"check" | "action" | null>(null);
   const availableUpdate = useRef<Update | null>(null);
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
   const [updateBusy, setUpdateBusy] = useState(false);
-  const updateBusyRef = useRef(false);
   const [updateDownloaded, setUpdateDownloaded] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateStatus, setUpdateStatus] = useState("");
@@ -983,8 +983,9 @@ function App() {
   }
 
   async function checkForUpdates(reportCurrent: boolean) {
-    if (!UPDATER_ENABLED || updaterCheckInFlight.current || updateBusyRef.current) return;
-    updaterCheckInFlight.current = true;
+    if (!UPDATER_ENABLED || updaterOperation.current !== null) return;
+    updaterOperation.current = "check";
+    setUpdateChecking(true);
     if (reportCurrent) {
       setUpdateError("");
       setUpdateStatus(t("checkingForUpdates"));
@@ -1016,16 +1017,17 @@ function App() {
       if (reportCurrent) setUpdateStatus("");
       if (reportCurrent) setUpdateError(t("updateCheckFailed"));
     } finally {
-      updaterCheckInFlight.current = false;
+      updaterOperation.current = null;
+      setUpdateChecking(false);
     }
   }
 
   async function downloadAvailableUpdate() {
     const update = availableUpdate.current;
-    if (!update || updateBusyRef.current) return;
+    if (!update || updaterOperation.current !== null) return;
     if (!window.confirm(t("downloadUpdateConfirm"))) return;
     setUpdateError("");
-    updateBusyRef.current = true;
+    updaterOperation.current = "action";
     setUpdateBusy(true);
     setUpdateStatus(t("downloadingUpdate"));
     setUpdateProgress(null);
@@ -1050,7 +1052,7 @@ function App() {
       setUpdateError(t("updateDownloadFailed"));
       setUpdateStatus("");
     } finally {
-      updateBusyRef.current = false;
+      updaterOperation.current = null;
       setUpdateBusy(false);
     }
   }
@@ -1069,14 +1071,14 @@ function App() {
 
   async function installDownloadedUpdate() {
     const update = availableUpdate.current;
-    if (!update || !updateDownloaded || updateBusyRef.current) return;
+    if (!update || !updateDownloaded || updaterOperation.current !== null) return;
     if (downloads.some((item) => ACTIVE_STATUSES.has(item.status))) {
       setUpdateError(t("updateBlocked"));
       return;
     }
     if (!window.confirm(t("restartUpdateConfirm"))) return;
     setUpdateError("");
-    updateBusyRef.current = true;
+    updaterOperation.current = "action";
     setUpdateBusy(true);
     let gateHeld = false;
     let installed = false;
@@ -1094,7 +1096,7 @@ function App() {
       } else {
         if (gateHeld) await invoke("cancel_update_install").catch(() => undefined);
         setUpdateError(t("updateInstallFailed"));
-        updateBusyRef.current = false;
+        updaterOperation.current = null;
         setUpdateBusy(false);
       }
     }
@@ -1321,10 +1323,10 @@ function App() {
               <button
                 className="bridge-button"
                 type="button"
-                disabled={updateBusy}
+                disabled={updateBusy || updateChecking}
                 onClick={() => void checkForUpdates(true)}
               >
-                {updateBusy ? t("checkingForUpdates") : t("checkForUpdates")}
+                {updateChecking ? t("checkingForUpdates") : t("checkForUpdates")}
               </button>
               {updateStatus && <small role="status">{updateStatus}</small>}
             </div>
@@ -1364,7 +1366,7 @@ function App() {
             </div>
             <button
               type="button"
-              disabled={updateBusy}
+              disabled={updateBusy || updateChecking}
               onClick={() => void (updateDownloaded
                 ? installDownloadedUpdate()
                 : downloadAvailableUpdate())}
