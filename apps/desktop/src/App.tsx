@@ -301,6 +301,7 @@ function App() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySort, setHistorySort] = useState<HistorySort>("newest");
   const [error, setError] = useState("");
+  const [updateError, setUpdateError] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [choosingDestination, setChoosingDestination] = useState(false);
   const [scheduledStart, setScheduledStart] = useState("");
@@ -983,9 +984,13 @@ function App() {
   async function checkForUpdates(reportCurrent: boolean) {
     if (!UPDATER_ENABLED || updaterCheckInFlight.current || updateBusy) return;
     updaterCheckInFlight.current = true;
-    if (reportCurrent) setUpdateStatus(t("checkingForUpdates"));
+    if (reportCurrent) {
+      setUpdateError("");
+      setUpdateStatus(t("checkingForUpdates"));
+    }
     try {
       const update = await check({ timeout: 20_000 });
+      setUpdateError("");
       if (!update) {
         if (availableUpdate.current) await availableUpdate.current.close();
         availableUpdate.current = null;
@@ -1008,7 +1013,7 @@ function App() {
       setUpdateStatus("");
     } catch {
       if (reportCurrent) setUpdateStatus("");
-      if (reportCurrent) setError(t("updateCheckFailed"));
+      if (reportCurrent) setUpdateError(t("updateCheckFailed"));
     } finally {
       updaterCheckInFlight.current = false;
     }
@@ -1018,6 +1023,7 @@ function App() {
     const update = availableUpdate.current;
     if (!update || updateBusy) return;
     if (!window.confirm(t("downloadUpdateConfirm"))) return;
+    setUpdateError("");
     setUpdateBusy(true);
     setUpdateStatus(t("downloadingUpdate"));
     setUpdateProgress(null);
@@ -1039,7 +1045,7 @@ function App() {
       setUpdateDownloaded(true);
       setUpdateStatus(t("updateReady"));
     } catch {
-      setError(t("updateDownloadFailed"));
+      setUpdateError(t("updateDownloadFailed"));
       setUpdateStatus("");
     } finally {
       setUpdateBusy(false);
@@ -1062,10 +1068,11 @@ function App() {
     const update = availableUpdate.current;
     if (!update || !updateDownloaded || updateBusy) return;
     if (downloads.some((item) => ACTIVE_STATUSES.has(item.status))) {
-      setError(t("updateBlocked"));
+      setUpdateError(t("updateBlocked"));
       return;
     }
     if (!window.confirm(t("restartUpdateConfirm"))) return;
+    setUpdateError("");
     setUpdateBusy(true);
     let gateHeld = false;
     let installed = false;
@@ -1078,11 +1085,11 @@ function App() {
       await relaunch();
     } catch {
       if (installed) {
-        setError(t("updateRestartFailed"));
+        setUpdateError(t("updateRestartFailed"));
         setUpdateStatus(t("updateRestartFailed"));
       } else {
         if (gateHeld) await invoke("cancel_update_install").catch(() => undefined);
-        setError(t("updateInstallFailed"));
+        setUpdateError(t("updateInstallFailed"));
         setUpdateBusy(false);
       }
     }
@@ -1391,6 +1398,7 @@ function App() {
           </form>
 
           {error && <p className="result error" role="alert">{error}</p>}
+          {updateError && <p className="result error" role="alert">{updateError}</p>}
           {inspection && (
             <div className="inspection-card">
               <div className="inspection-details">
