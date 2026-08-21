@@ -36,7 +36,7 @@ function tomlStringArray(section, key) {
 
 function yamlString(document, key) {
   const match = document.match(
-    new RegExp(`^\\s*${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
+    new RegExp(`^${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
   );
   assert.ok(match, `Missing YAML string key: ${key}`);
   return match[1] ?? match[2] ?? match[3];
