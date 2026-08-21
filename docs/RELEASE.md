@@ -16,7 +16,7 @@ bundle build without receiving signing credentials.
 Signed direct-download Windows and macOS packages remain optional jobs. They run only when the repository variable `ENABLE_SIGNED_RELEASES` is set to `true`; Windows certificate and Apple Developer credentials are then required in the protected `release` environment. The Linux release does not wait for those credentials. Standalone macOS host archives are submitted to Apple notarization after the host is signed.
 
 Release PR creation requires either a fine-grained `RELEASE_PLEASE_TOKEN` repository secret with
-Contents and Pull requests write access (recommended, because its commits can trigger follow-up CI),
+Contents, Pull requests, and Issues write access (recommended, because its commits can trigger follow-up CI),
 or the repository's **Allow GitHub Actions to create and approve pull requests** setting. The
 workflow falls back to `GITHUB_TOKEN` only when the dedicated secret is absent.
 
@@ -41,8 +41,9 @@ environment variable `TAURI_UPDATER_PUBLIC_KEY`. Never paste the private key int
 request, command log, repository variable, or artifact.
 
 Add a fine-grained bot token as repository secret `RELEASE_PLEASE_TOKEN` with access only to this
-repository and permission to write contents and pull requests. This lets release PRs trigger normal
-CI; the workflow never merges those PRs automatically.
+repository and permission to write contents, pull requests, and issues. The Issues permission lets
+Release Please manage its PR labels. This token also lets release PRs trigger normal CI; the workflow
+never merges those PRs automatically.
 
 Set the repository variable `ENABLE_SIGNED_RELEASES` to `true` only after those credentials are ready. The signed jobs deliberately fail instead of publishing unsigned Windows or unnotarized macOS release artifacts. Certificates and account credentials cannot be supplied by source code; the repository owner must obtain them from an appropriate certificate authority and Apple Developer account.
 
