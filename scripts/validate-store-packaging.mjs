@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { topLevelYamlString } from "./top-level-yaml-string.mjs";
+
 const repository = path.resolve(
   process.env.QUIVERDL_RELEASE_REPOSITORY
     ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
@@ -32,18 +34,6 @@ function tomlStringArray(section, key) {
   assert.equal(remainder, "", `Unsupported value in TOML array: ${key}`);
   assert.ok(values.length > 0, `TOML array must not be empty: ${key}`);
   return values;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function topLevelYamlString(document, key) {
-  const match = document.match(
-    new RegExp(`^${escapeRegExp(key)}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
-  );
-  assert.ok(match, `Missing YAML string key: ${key}`);
-  return match[1] ?? match[2] ?? match[3];
 }
 
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
