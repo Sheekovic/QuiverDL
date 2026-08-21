@@ -1,9 +1,12 @@
-name: Signed release
+name: Release
 
 on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
@@ -24,9 +27,91 @@ jobs:
       - name: Require tag, desktop, extension, and store versions to match
         run: node scripts/validate-store-packaging.mjs
 
-  desktop:
-    name: ${{ matrix.name }}
+  linux:
+    name: Linux x64 packages
     needs: preflight
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-18
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/desktop
+      - name: Build native messaging host
+        run: cargo build --locked --release -p quiver-native-host --target x86_64-unknown-linux-gnu
+      - name: Validate Linux bundles on pull requests
+        if: github.event_name == 'pull_request'
+        run: npm run tauri -- build --bundles deb,rpm,appimage
+        working-directory: apps/desktop
+      - name: Build and publish Linux bundles
+        if: github.event_name == 'push'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: QuiverDL ${{ github.ref_name }}
+          releaseBody: Linux packages are available below. Windows is available from Microsoft Store; signed direct-download packages for Windows and macOS will be added separately.
+          releaseDraft: true
+          prerelease: false
+          args: --bundles deb,rpm,appimage
+      - name: Attach Linux bundle checksums
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          checksum_file="$RUNNER_TEMP/SHA256SUMS-linux-x64.txt"
+          while IFS= read -r -d '' bundle; do
+            printf '%s  %s\n' "$(sha256sum "$bundle" | cut -d ' ' -f 1)" "$(basename "$bundle")"
+          done < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z) > "$checksum_file"
+          test -s "$checksum_file"
+          gh release upload "${{ github.ref_name }}" "$checksum_file" --clobber
+      - name: Attach Linux native messaging host archive
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/quiver-native-host-x86_64-unknown-linux-gnu"
+          mkdir -p "$stage"
+          cp target/x86_64-unknown-linux-gnu/release/quiver-native-host "$stage/"
+          cp -R extensions "$stage/"
+          cp LICENSE README.md "$stage/"
+          archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-x86_64-unknown-linux-gnu.tar.gz"
+          tar -C "$RUNNER_TEMP" -czf "$archive" "$(basename "$stage")"
+          archive_dir=$(dirname "$archive")
+          archive_name=$(basename "$archive")
+          (cd "$archive_dir" && sha256sum "$archive_name") > "$archive.sha256"
+          gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber
+
+  publish-linux:
+    name: Publish Linux release
+    needs: linux
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the validated Linux release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false
+
+  signed-desktop:
+    name: ${{ matrix.name }}
+    needs: linux
+    if: github.event_name == 'push' && vars.ENABLE_SIGNED_RELEASES == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -35,10 +120,6 @@ jobs:
             os: windows-latest
             args: --target x86_64-pc-windows-msvc --bundles nsis,msi --config src-tauri/tauri.release.conf.json
             target: x86_64-pc-windows-msvc
-          - name: Linux x64 packages
-            os: ubuntu-22.04
-            args: --bundles deb,rpm,appimage
-            target: x86_64-unknown-linux-gnu
           - name: macOS Apple Silicon
             os: macos-latest
             args: --target aarch64-apple-darwin --bundles app,dmg
@@ -224,7 +305,8 @@ jobs:
 
   browser-extensions:
     name: Browser store submission archives
-    needs: desktop
+    needs: linux
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

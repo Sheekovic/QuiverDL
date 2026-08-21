@@ -80,7 +80,7 @@
     platformMessage = "macOS detected — native Mac downloads are coming soon.";
   } else if (platformValue.includes("linux") || platformValue.includes("x11")) {
     platform = "linux";
-    platformMessage = "Linux detected — AppImage, Debian, and RPM packages are coming soon.";
+    platformMessage = "Linux detected — download the AppImage, Debian, or RPM package from GitHub Releases.";
   }
 
   if (platform) {
