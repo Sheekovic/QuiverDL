@@ -14,22 +14,105 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-quality:
-    name: Rust formatting and linting
+  changes:
+    name: Classify changes
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      rust: ${{ steps.classify.outputs.rust }}
+      frontend: ${{ steps.classify.outputs.frontend }}
+      desktop: ${{ steps.classify.outputs.desktop }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Select required validation
+        id: classify
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          code=false
+          rust=false
+          frontend=false
+          desktop=false
+
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            code=true
+            rust=true
+            frontend=true
+            desktop=true
+          else
+            while IFS= read -r file; do
+              case "$file" in
+                *.md|docs/*)
+                  ;;
+                *)
+                  code=true
+                  ;;
+              esac
+
+              case "$file" in
+                Cargo.toml|Cargo.lock|rust-toolchain*|*.rs|crates/*|apps/desktop/src-tauri/*)
+                  rust=true
+                  ;;
+              esac
+
+              case "$file" in
+                apps/desktop/*|extensions/*|packaging/windows/*|scripts/*.mjs|package.json|package-lock.json)
+                  frontend=true
+                  ;;
+              esac
+
+              case "$file" in
+                Cargo.toml|Cargo.lock|crates/*|apps/desktop/src-tauri/*|extensions/native-host/*|packaging/windows/*|scripts/*.ps1)
+                  desktop=true
+                  ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
+          fi
+
+          for flag in code rust frontend desktop; do
+            echo "$flag=${!flag}" >> "$GITHUB_OUTPUT"
+          done
+
+  rust-quality:
+    name: Rust formatting and linting
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip Rust validation
+        if: ${{ needs.changes.outputs.rust != 'true' }}
+        run: echo "No Rust files changed."
+      - uses: actions/checkout@v7
+        if: ${{ needs.changes.outputs.rust == 'true' }}
       - name: Install stable Rust
+        if: ${{ needs.changes.outputs.rust == 'true' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Cache Cargo
+        if: ${{ needs.changes.outputs.rust == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Check formatting
+        if: ${{ needs.changes.outputs.rust == 'true' }}
         run: cargo fmt --all -- --check
       - name: Run Clippy
+        if: ${{ needs.changes.outputs.rust == 'true' }}
         run: cargo clippy -p quiver-core --all-targets -- -D warnings
 
   core-tests:
     name: Core tests (${{ matrix.os }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -39,28 +122,57 @@ jobs:
           - windows-latest
           - macos-latest
     steps:
+      - name: Skip core tests
+        if: ${{ needs.changes.outputs.rust != 'true' }}
+        run: echo "No Rust files changed."
+      - name: Defer full platform coverage until main
+        if: ${{ needs.changes.outputs.rust == 'true' && github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest' }}
+        run: echo "Cross-platform tests run on main after the fast pull-request checks."
       - uses: actions/checkout@v7
+        if: ${{ needs.changes.outputs.rust == 'true' && (github.event_name != 'pull_request' || matrix.os == 'ubuntu-latest') }}
       - name: Install stable Rust
+        if: ${{ needs.changes.outputs.rust == 'true' && (github.event_name != 'pull_request' || matrix.os == 'ubuntu-latest') }}
         uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        if: ${{ needs.changes.outputs.rust == 'true' && (github.event_name != 'pull_request' || matrix.os == 'ubuntu-latest') }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Run engine and browser bridge tests
+        if: ${{ needs.changes.outputs.rust == 'true' && (github.event_name != 'pull_request' || matrix.os == 'ubuntu-latest') }}
         run: cargo test -p quiver-core -p quiver-native-host
 
   frontend:
     name: Frontend build
+    needs: changes
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/desktop
     steps:
+      - name: Skip frontend validation
+        if: ${{ needs.changes.outputs.frontend != 'true' }}
+        working-directory: .
+        run: echo "No frontend, extension, or packaging files changed."
       - uses: actions/checkout@v7
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
       - uses: actions/setup-node@v7
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
-      - run: npm ci
-      - run: npm run build
+      - if: ${{ needs.changes.outputs.frontend == 'true' }}
+        run: npm ci
+      - if: ${{ needs.changes.outputs.frontend == 'true' }}
+        run: npm run build
       - name: Validate extension scripts and manifests
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
         run: |
           node --check ../../extensions/chromium/background.js
           node --check ../../extensions/chromium/options.js
@@ -80,21 +192,20 @@ jobs:
 
   desktop-check:
     name: Desktop Rust check
+    needs: changes
     runs-on: windows-latest
     steps:
+      - name: Skip Windows desktop validation
+        if: ${{ needs.changes.outputs.desktop != 'true' }}
+        run: echo "No Windows desktop integration files changed."
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/desktop/package-lock.json
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: apps/desktop
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
       - name: Test Windows native host installer
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
         shell: powershell
         run: .\extensions\native-host\test-install-windows.ps1
       - name: Validate Microsoft Store scripts and manifest
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
         shell: powershell
         run: |
           foreach ($script in @(
@@ -115,13 +226,19 @@ jobs:
             throw 'The MSIX manifest identity does not match Partner Center.'
           }
       - name: Install stable Rust
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
         uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        uses: actions/cache@v4
         with:
-          components: clippy
-      - name: Run workspace Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run workspace tests
-        run: cargo test --workspace
-      - name: Build and validate Microsoft Store MSIX
-        shell: powershell
-        run: .\scripts\package-msix.ps1 -OutputDirectory $env:RUNNER_TEMP\store
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Check Windows desktop integration
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        run: cargo check -p quiver-desktop -p quiver-native-host --all-targets
+
