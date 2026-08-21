@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated v* tag to release
+        required: true
+        type: string
   pull_request:
     paths:
       - ".github/workflows/release.yml"
@@ -14,30 +20,43 @@ on:
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   preflight:
     name: Validate release identity
     runs-on: ubuntu-latest
+    outputs:
+      release_commit: ${{ steps.release-identity.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Require an annotated tag on reviewed main history
+        id: release-identity
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$RELEASE_TAG" = "v$(cat version.txt)"
+          tag_ref="refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "$tag_ref")" = "tag"
+          tag_commit="$(git rev-list -n 1 "$tag_ref")"
+          test "$tag_commit" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$tag_commit" FETCH_HEAD
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - name: Require tag, desktop, extension, and store versions to match
         run: node scripts/validate-store-packaging.mjs
-      - name: Require an annotated tag on reviewed main history
-        if: github.event_name == 'push'
-        shell: bash
-        run: |
-          test "$(git cat-file -t "$GITHUB_REF")" = "tag"
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
   linux-validate:
     name: Validate Linux x64 packages
@@ -80,11 +99,21 @@ jobs:
   linux:
     name: Signed Linux x64 packages
     needs: preflight
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     environment: release
+    env:
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.release_commit }}
+      - name: Reconfirm the immutable release tag
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -140,85 +169,102 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            test "$(gh release view "${{ github.ref_name }}" --json isDraft --jq .isDraft)" = "true"
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
           else
-            gh release create "${{ github.ref_name }}" --draft --title "QuiverDL ${{ github.ref_name }}" --notes "Linux packages are available below. Windows is available from Microsoft Store."
+            gh release create "$RELEASE_TAG" --draft --title "QuiverDL $RELEASE_TAG" --notes "Linux packages are available below. Windows is available from Microsoft Store."
           fi
           mapfile -d '' bundles < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
           test "${#bundles[@]}" -eq 3
           appimage="$(printf '%s\n' "${bundles[@]}" | grep '\.AppImage$')"
           test -f "$appimage.sig"
-          gh release upload "${{ github.ref_name }}" "${bundles[@]}" "$appimage.sig" --clobber
+          gh release upload "$RELEASE_TAG" "${bundles[@]}" "$appimage.sig" --clobber
       - name: Attach Linux bundle checksums
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
           checksum_file="$RUNNER_TEMP/SHA256SUMS-linux-x64.txt"
           while IFS= read -r -d '' bundle; do
             printf '%s  %s\n' "$(sha256sum "$bundle" | cut -d ' ' -f 1)" "$(basename "$bundle")"
           done < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z) > "$checksum_file"
           test -s "$checksum_file"
-          gh release upload "${{ github.ref_name }}" "$checksum_file" --clobber
+          gh release upload "$RELEASE_TAG" "$checksum_file" --clobber
       - name: Attach Linux native messaging host archive
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
           stage="$RUNNER_TEMP/quiver-native-host-x86_64-unknown-linux-gnu"
           mkdir -p "$stage"
           cp target/x86_64-unknown-linux-gnu/release/quiver-native-host "$stage/"
           cp -R extensions "$stage/"
           cp LICENSE README.md "$stage/"
-          archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-x86_64-unknown-linux-gnu.tar.gz"
+          archive="$RUNNER_TEMP/QuiverDL-${RELEASE_TAG}-native-host-x86_64-unknown-linux-gnu.tar.gz"
           tar -C "$RUNNER_TEMP" -czf "$archive" "$(basename "$stage")"
           archive_dir=$(dirname "$archive")
           archive_name=$(basename "$archive")
           (cd "$archive_dir" && sha256sum "$archive_name") > "$archive.sha256"
-          gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber
+          gh release upload "$RELEASE_TAG" "$archive" "$archive.sha256" --clobber
       - name: Publish the verified updater manifest last
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
         shell: bash
         run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
           appimage="$(find . -type f -path '*/release/bundle/appimage/*.AppImage' -print -quit)"
           test -n "$appimage"
           manifest="$RUNNER_TEMP/latest.json"
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           node scripts/generate-update-manifest.mjs \
             --version "$version" \
-            --base-url "https://github.com/Sheekovic/QuiverDL/releases/download/$GITHUB_REF_NAME" \
+            --base-url "https://github.com/Sheekovic/QuiverDL/releases/download/$RELEASE_TAG" \
             --output "$manifest" \
             --platform linux-x86_64 \
             --artifact "linux-x86_64=$appimage"
-          gh release upload "$GITHUB_REF_NAME" "$manifest" --clobber
+          gh release upload "$RELEASE_TAG" "$manifest" --clobber
 
   publish-linux:
     name: Publish Linux release
     needs:
+      - preflight
       - linux
       - signed-desktop
       - browser-extensions
     if: >-
       always() &&
-      github.event_name == 'push' &&
+      github.event_name != 'pull_request' &&
       needs.linux.result == 'success' &&
       needs.browser-extensions.result == 'success' &&
       (needs.signed-desktop.result == 'success' || needs.signed-desktop.result == 'skipped')
     runs-on: ubuntu-latest
+    env:
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
     steps:
       - name: Publish the validated Linux release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false
+        shell: bash
+        run: |
+          remote_commit="$(git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
+          gh release edit "$RELEASE_TAG" --draft=false
 
   signed-desktop:
     name: ${{ matrix.name }}
-    needs: linux
-    if: github.event_name == 'push' && vars.ENABLE_SIGNED_RELEASES == 'true'
+    needs:
+      - preflight
+      - linux
+    if: github.event_name != 'pull_request' && vars.ENABLE_SIGNED_RELEASES == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -237,8 +283,18 @@ jobs:
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     environment: release
+    env:
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.release_commit }}
+      - name: Reconfirm the immutable release tag
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -331,6 +387,11 @@ jobs:
           host="target/${{ matrix.target }}/release/quiver-native-host"
           codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$host"
           codesign --verify --strict --verbose=2 "$host"
+      - name: Reconfirm the release tag before desktop upload
+        shell: bash
+        run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
       - name: Build, sign, and attach desktop bundles
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
@@ -341,8 +402,8 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: QuiverDL ${{ github.ref_name }}
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: QuiverDL ${{ env.RELEASE_TAG }}
           releaseBody: See the checksums, installation notes, and security documentation included with this release.
           releaseDraft: true
           prerelease: false
@@ -354,15 +415,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $remoteCommit = (git ls-remote --exit-code origin "refs/tags/$env:RELEASE_TAG^{}" | ForEach-Object { ($_ -split '\s+')[0] })
+          if ($remoteCommit -ne $env:RELEASE_COMMIT) { throw "Release tag moved after validation" }
           $stage = Join-Path $env:RUNNER_TEMP "QuiverDL-portable"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item target/${{ matrix.target }}/release/quiver-desktop.exe, target/${{ matrix.target }}/release/quiver-native-host.exe, LICENSE, README.md -Destination $stage
           Copy-Item extensions -Destination $stage -Recurse
-          $archive = Join-Path $env:RUNNER_TEMP "QuiverDL-${{ github.ref_name }}-windows-x64-portable.zip"
+          $archive = Join-Path $env:RUNNER_TEMP "QuiverDL-${{ env.RELEASE_TAG }}-windows-x64-portable.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256"
-          gh release upload "${{ github.ref_name }}" $archive "$archive.sha256" --clobber
+          gh release upload "$env:RELEASE_TAG" $archive "$archive.sha256" --clobber
 
       - name: Create and attach Windows native messaging host archive
         if: runner.os == 'Windows'
@@ -370,15 +433,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $remoteCommit = (git ls-remote --exit-code origin "refs/tags/$env:RELEASE_TAG^{}" | ForEach-Object { ($_ -split '\s+')[0] })
+          if ($remoteCommit -ne $env:RELEASE_COMMIT) { throw "Release tag moved after validation" }
           $stage = Join-Path $env:RUNNER_TEMP "QuiverDL-native-host-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item target/${{ matrix.target }}/release/quiver-native-host.exe, LICENSE, README.md -Destination $stage
           Copy-Item extensions -Destination $stage -Recurse
-          $archive = Join-Path $env:RUNNER_TEMP "QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.zip"
+          $archive = Join-Path $env:RUNNER_TEMP "QuiverDL-${{ env.RELEASE_TAG }}-native-host-${{ matrix.target }}.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256"
-          gh release upload "${{ github.ref_name }}" $archive "$archive.sha256" --clobber
+          gh release upload "$env:RELEASE_TAG" $archive "$archive.sha256" --clobber
 
       - name: Attach native messaging host archive
         if: runner.os != 'Windows'
@@ -388,13 +453,15 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
           stage="$RUNNER_TEMP/quiver-native-host-${{ matrix.target }}"
           mkdir -p "$stage"
           cp "target/${{ matrix.target }}/release/quiver-native-host" "$stage/"
           cp -R extensions "$stage/"
           cp LICENSE README.md "$stage/"
           if [ "${{ runner.os }}" = "macOS" ]; then
-            archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.zip"
+            archive="$RUNNER_TEMP/QuiverDL-${RELEASE_TAG}-native-host-${{ matrix.target }}.zip"
             ditto -c -k --keepParent "$stage" "$archive"
             xcrun notarytool submit "$archive" \
               --apple-id "$APPLE_ID" \
@@ -402,21 +469,33 @@ jobs:
               --team-id "$APPLE_TEAM_ID" \
               --wait
           else
-            archive="$RUNNER_TEMP/QuiverDL-${{ github.ref_name }}-native-host-${{ matrix.target }}.tar.gz"
+            archive="$RUNNER_TEMP/QuiverDL-${RELEASE_TAG}-native-host-${{ matrix.target }}.tar.gz"
             tar -C "$RUNNER_TEMP" -czf "$archive" "$(basename "$stage")"
           fi
           archive_dir=$(dirname "$archive")
           archive_name=$(basename "$archive")
           (cd "$archive_dir" && shasum -a 256 "$archive_name") > "$archive.sha256"
-          gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber
+          gh release upload "$RELEASE_TAG" "$archive" "$archive.sha256" --clobber
 
   browser-extensions:
     name: Browser store submission archives
-    needs: linux
-    if: github.event_name == 'push'
+    needs:
+      - preflight
+      - linux
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.release_commit }}
+      - name: Reconfirm the immutable release tag
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -430,4 +509,8 @@ jobs:
       - name: Attach unsigned store submission archives
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" dist/store/*.zip dist/store/SHA256SUMS --clobber
+        shell: bash
+        run: |
+          remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
+          test "$remote_commit" = "$RELEASE_COMMIT"
+          gh release upload "$RELEASE_TAG" dist/store/*.zip dist/store/SHA256SUMS --clobber
