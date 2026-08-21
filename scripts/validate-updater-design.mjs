@@ -101,6 +101,10 @@ assert.match(releaseWorkflow, /VITE_QUIVERDL_UPDATER: "true"/);
 assert.match(releaseWorkflow, /--config src-tauri\/tauri\.updater\.conf\.json/);
 assert.match(releaseWorkflow, /--platform linux-x86_64/);
 assert.match(releaseWorkflow, /workflow_dispatch:\s*\n\s+inputs:\s*\n\s+tag:/);
+assert.match(
+  releaseWorkflow,
+  /group: release-\$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', inputs\.tag\) \|\| github\.ref \}\}/,
+);
 assert.match(releaseWorkflow, /test "\$RELEASE_TAG" = "v\$\(cat version\.txt\)"/);
 assert.match(releaseWorkflow, /git cat-file -t "\$tag_ref"/);
 assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$tag_commit" FETCH_HEAD/);
