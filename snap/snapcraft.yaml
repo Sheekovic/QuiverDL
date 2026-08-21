@@ -1,18 +1,18 @@
 name: quiverdl
 base: core24
-version: '0.1.0'
+version: 0.2.0
 summary: Fast, private, and reliable download manager
 description: |
   QuiverDL is a performance-first open-source download manager with a native
   Rust transfer engine, safe restart recovery, and no accounts or telemetry.
 grade: stable
 confinement: strict
-
 apps:
   quiverdl:
     command: usr/bin/quiver-desktop
     desktop: usr/share/applications/QuiverDL.desktop
-    extensions: [gnome]
+    extensions:
+      - gnome
     plugs:
       - home
       - network
@@ -22,19 +22,16 @@ apps:
       - quiverdl-single-instance
     slots:
       - quiverdl-single-instance
-
 plugs:
   quiverdl-single-instance:
     interface: dbus
     bus: session
     name: app.quiverdl.desktop.SingleInstance
-
 slots:
   quiverdl-single-instance:
     interface: dbus
     bus: session
     name: app.quiverdl.desktop.SingleInstance
-
 parts:
   quiverdl:
     plugin: dump
