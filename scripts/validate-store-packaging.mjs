@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { topLevelYamlString } from "./top-level-yaml-string.mjs";
+
 const repository = path.resolve(
   process.env.QUIVERDL_RELEASE_REPOSITORY
     ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
@@ -126,9 +128,9 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
-assert.match(
-  snapcraft,
-  new RegExp(`^version: ['"]${desktop.version.replaceAll(".", "\\.")}['"]$`, "m"),
+assert.equal(
+  topLevelYamlString(snapcraft, "version"),
+  desktop.version,
   "Snap and desktop versions must match",
 );
 assert.match(snapcraft, /^confinement: strict$/m);

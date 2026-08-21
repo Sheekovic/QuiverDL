@@ -187,6 +187,7 @@ jobs:
           node --test ../../scripts/test-generate-update-manifest.mjs
           node --test ../../scripts/test-prepare-updater-config.mjs
           node --test ../../scripts/test-sync-release-lockfile.mjs
+          node --test ../../scripts/test-top-level-yaml-string.mjs
           node ../../scripts/validate-store-packaging.mjs
           node --test ../../scripts/test-package-extensions.mjs
           node ../../scripts/package-extensions.mjs ../../dist/store
