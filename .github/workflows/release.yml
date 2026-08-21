@@ -224,7 +224,7 @@ jobs:
           test -n "$appimage"
           manifest="$RUNNER_TEMP/latest.json"
           version="${RELEASE_TAG#v}"
-          node scripts/generate-update-manifest.mjs \
+          GITHUB_REF_NAME="$RELEASE_TAG" node scripts/generate-update-manifest.mjs \
             --version "$version" \
             --base-url "https://github.com/Sheekovic/QuiverDL/releases/download/$RELEASE_TAG" \
             --output "$manifest" \
