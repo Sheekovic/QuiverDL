@@ -119,7 +119,7 @@ assert.match(
   /workflow_commit: \$\{\{ steps\.release-identity\.outputs\.workflow_commit \}\}/,
 );
 assert.match(releaseWorkflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/);
-assert.match(releaseWorkflow, /test "\$GITHUB_SHA" = "\$\(git rev-parse FETCH_HEAD\)"/);
+assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$GITHUB_SHA" FETCH_HEAD/);
 assert.match(
   releaseWorkflow,
   /name: Check out reviewed recovery tooling\s+if: github\.event_name == 'workflow_dispatch'[\s\S]*?ref: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?path: \.release-tools[\s\S]*?persist-credentials: false/,

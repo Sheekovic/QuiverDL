@@ -56,7 +56,7 @@ jobs:
           workflow_commit="$tag_commit"
           if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
             test "$GITHUB_REF" = "refs/heads/main"
-            test "$GITHUB_SHA" = "$(git rev-parse FETCH_HEAD)"
+            git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD
             workflow_commit="$GITHUB_SHA"
           fi
           echo "workflow_commit=$workflow_commit" >> "$GITHUB_OUTPUT"
