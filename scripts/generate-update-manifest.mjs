@@ -43,7 +43,7 @@ export function validateUpdaterSignature(value, platform) {
   }
   if (
     lines.length !== 4 ||
-    lines[0] !== "untrusted comment: signature from minisign secret key" ||
+    lines[0] !== "untrusted comment: signature from tauri secret key" ||
     !lines[2].startsWith("trusted comment: ") ||
     /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(lines[2])
   ) {

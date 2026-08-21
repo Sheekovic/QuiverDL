@@ -102,7 +102,7 @@ assert.match(releaseWorkflow, /--config src-tauri\/tauri\.updater\.conf\.json/);
 assert.match(releaseWorkflow, /--platform linux-x86_64/);
 assert.match(
   releaseWorkflow,
-  /GITHUB_REF_NAME="\$RELEASE_TAG" node scripts\/generate-update-manifest\.mjs/,
+  /GITHUB_REF_NAME="\$RELEASE_TAG" node "\$manifest_script"/,
   "manual releases must validate the manifest against the trusted release tag, not the dispatch branch",
 );
 assert.match(releaseWorkflow, /workflow_dispatch:\s*\n\s+inputs:\s*\n\s+tag:/);
@@ -114,6 +114,21 @@ assert.match(releaseWorkflow, /test "\$RELEASE_TAG" = "v\$\(cat version\.txt\)"/
 assert.match(releaseWorkflow, /git cat-file -t "\$tag_ref"/);
 assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$tag_commit" FETCH_HEAD/);
 assert.match(releaseWorkflow, /release_commit: \$\{\{ steps\.release-identity\.outputs\.commit \}\}/);
+assert.match(
+  releaseWorkflow,
+  /workflow_commit: \$\{\{ steps\.release-identity\.outputs\.workflow_commit \}\}/,
+);
+assert.match(releaseWorkflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/);
+assert.match(releaseWorkflow, /test "\$GITHUB_SHA" = "\$\(git rev-parse FETCH_HEAD\)"/);
+assert.match(
+  releaseWorkflow,
+  /name: Check out reviewed recovery tooling\s+if: github\.event_name == 'workflow_dispatch'[\s\S]*?ref: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?path: \.release-tools[\s\S]*?persist-credentials: false/,
+);
+assert.match(
+  releaseWorkflow,
+  /test "\$\(git -C \.release-tools rev-parse HEAD\)" = "\$WORKFLOW_COMMIT"/,
+);
+assert.match(releaseWorkflow, /manifest_script="\.release-tools\/scripts\/generate-update-manifest\.mjs"/);
 assert.ok(
   releaseWorkflow.indexOf("name: Require an annotated tag on reviewed main history")
     < releaseWorkflow.indexOf("uses: actions/setup-node"),
