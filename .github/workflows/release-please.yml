@@ -24,12 +24,23 @@ jobs:
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Resolve the generated release branch
+        id: release-branch
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          RELEASE_PR_JSON: ${{ steps.release.outputs.pr }}
+        shell: bash
+        run: |
+          release_branch="$(jq -er '.headBranchName | strings' <<< "$RELEASE_PR_JSON")"
+          [[ "$release_branch" =~ ^[A-Za-z0-9._/-]+$ ]]
+          [[ "$release_branch" != /* && "$release_branch" != *..* ]]
+          echo "name=$release_branch" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.release.outputs.prs_created == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          ref: ${{ steps.release-branch.outputs.name }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Check out trusted release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,7 +58,7 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         env:
           QUIVERDL_RELEASE_REPOSITORY: ${{ github.workspace }}
-          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          RELEASE_BRANCH: ${{ steps.release-branch.outputs.name }}
         shell: bash
         run: |
           [[ "$RELEASE_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
@@ -66,7 +77,7 @@ jobs:
       - name: Push the synchronized release branch
         if: steps.synchronize.outputs.changed == 'true'
         env:
-          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          RELEASE_BRANCH: ${{ steps.release-branch.outputs.name }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
         shell: bash
         run: |

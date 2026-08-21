@@ -106,6 +106,12 @@ assert.equal(
   "release caches must exclude stale Tauri bundle outputs",
 );
 assert.match(releasePleaseWorkflow, /scripts\/sync-release-lockfile\.mjs/);
+assert.doesNotMatch(
+  releasePleaseWorkflow,
+  /fromJSON\(steps\.release\.outputs\.pr\)/,
+  "skipped release steps must not parse an empty action output",
+);
+assert.match(releasePleaseWorkflow, /jq -er '\.headBranchName \| strings'/);
 assert.equal(
   (releasePleaseWorkflow.match(/persist-credentials: false/g) ?? []).length,
   2,
