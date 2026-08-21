@@ -34,9 +34,13 @@ function tomlStringArray(section, key) {
   return values;
 }
 
-function yamlString(document, key) {
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function topLevelYamlString(document, key) {
   const match = document.match(
-    new RegExp(`^${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
+    new RegExp(`^${escapeRegExp(key)}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
   );
   assert.ok(match, `Missing YAML string key: ${key}`);
   return match[1] ?? match[2] ?? match[3];
@@ -134,7 +138,11 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
-assert.equal(yamlString(snapcraft, "version"), desktop.version, "Snap and desktop versions must match");
+assert.equal(
+  topLevelYamlString(snapcraft, "version"),
+  desktop.version,
+  "Snap and desktop versions must match",
+);
 assert.match(snapcraft, /^confinement: strict$/m);
 assert.match(snapcraft, /^\s+- home$/m);
 assert.match(snapcraft, /^\s+- network$/m);
