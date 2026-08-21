@@ -195,8 +195,8 @@ p {
 }
 
 .brand-logo {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
   filter: drop-shadow(0 7px 12px rgba(37, 191, 211, 0.18));
 }
@@ -487,8 +487,8 @@ nav .nav-github {
 }
 
 .mini-logo {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
 }
 
