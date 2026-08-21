@@ -58,6 +58,9 @@ builds use their marketplace update channel.
 1. Review and merge the draft Release Please PR only after CI and code review pass.
 2. Confirm `version-tag.yml` creates the exact synchronized `v*` tag and the release workflow enters
    the protected environment.
+   If GitHub does not enqueue the tag-push workflow, run the `Release` workflow manually with that
+   existing tag. The recovery path accepts only an annotated SemVer tag whose version matches the
+   checkout and whose commit is already contained in reviewed `main` history.
 3. Confirm the Linux workflow publishes AppImage, DEB, RPM, native-host, signature, checksum, and
    `latest.json` assets.
 4. Perform a clean-machine Linux launch and AppImage upgrade test, then add any additional
