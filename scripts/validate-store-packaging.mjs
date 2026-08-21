@@ -72,6 +72,11 @@ assert.equal(chromium.version, desktop.version, "Chromium and desktop versions m
 assert.equal(firefox.version, desktop.version, "Firefox and desktop versions must match");
 assert.equal(desktopPackage.version, desktop.version, "npm and Tauri versions must match");
 assert.equal(releaseConfig["release-type"], "simple", "Release Please must avoid Cargo workspace strategies");
+assert.equal(
+  releaseConfig.packages?.["."]?.["version-file"],
+  "version.txt",
+  "Release Please must update the release version file",
+);
 assert.equal(releaseVersion, desktop.version, "Release version file and Tauri versions must match");
 assert.equal(
   releaseManifest["."],

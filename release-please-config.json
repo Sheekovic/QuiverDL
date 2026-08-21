@@ -8,6 +8,7 @@
   "packages": {
     ".": {
       "package-name": "QuiverDL",
+      "version-file": "version.txt",
       "extra-files": [
         {
           "type": "toml",
