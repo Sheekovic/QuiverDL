@@ -106,6 +106,7 @@ jobs:
       - name: Publish the validated Linux release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: gh release edit "${{ github.ref_name }}" --draft=false
 
   signed-desktop:
