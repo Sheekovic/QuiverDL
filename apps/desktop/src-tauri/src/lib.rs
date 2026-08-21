@@ -37,6 +37,7 @@ fn quit_app(app: AppHandle) {
 
 struct TransferRegistry {
     transfers: Mutex<HashMap<String, ActiveTransfer>>,
+    update_installing: Mutex<bool>,
     global_limiter: BandwidthLimiter,
     host_policy: HostConnectionPolicy,
     sequential_queue: Arc<SequentialQueue>,
@@ -46,6 +47,7 @@ impl Default for TransferRegistry {
     fn default() -> Self {
         Self {
             transfers: Mutex::default(),
+            update_installing: Mutex::new(false),
             global_limiter: BandwidthLimiter::unlimited(),
             host_policy: HostConnectionPolicy::default(),
             sequential_queue: Arc::new(SequentialQueue::default()),
@@ -237,6 +239,13 @@ fn register_download(
         .map(parse_queue_timestamp)
         .transpose()?;
     let queue_sequence = parse_queue_sequence(&queue_sequence)?;
+    let update_installing = registry
+        .update_installing
+        .lock()
+        .map_err(|_| "The update gate is unavailable".to_string())?;
+    if *update_installing {
+        return Err("Finish or cancel the pending app update before starting a download".into());
+    }
     let mut transfers = registry
         .transfers
         .lock()
@@ -263,6 +272,44 @@ fn register_download(
         },
     );
     Ok(())
+}
+
+fn begin_update_install_guard(registry: &TransferRegistry) -> Result<(), String> {
+    let mut update_installing = registry
+        .update_installing
+        .lock()
+        .map_err(|_| "The update gate is unavailable".to_string())?;
+    if *update_installing {
+        return Err("An app update is already being installed".into());
+    }
+    if !registry
+        .transfers
+        .lock()
+        .map_err(|_| "Download controls are unavailable".to_string())?
+        .is_empty()
+    {
+        return Err("Finish or cancel every active and queued download before updating".into());
+    }
+    *update_installing = true;
+    Ok(())
+}
+
+fn cancel_update_install_guard(registry: &TransferRegistry) -> Result<(), String> {
+    *registry
+        .update_installing
+        .lock()
+        .map_err(|_| "The update gate is unavailable".to_string())? = false;
+    Ok(())
+}
+
+#[tauri::command]
+fn begin_update_install(registry: State<'_, TransferRegistry>) -> Result<(), String> {
+    begin_update_install_guard(&registry)
+}
+
+#[tauri::command]
+fn cancel_update_install(registry: State<'_, TransferRegistry>) -> Result<(), String> {
+    cancel_update_install_guard(&registry)
 }
 
 #[tauri::command]
@@ -777,6 +824,8 @@ pub fn run() {
                 }
             },
         ))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(TransferRegistry::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
@@ -831,6 +880,8 @@ pub fn run() {
             clear_proxy_credentials,
             has_proxy_credentials,
             validate_proxy_configuration,
+            begin_update_install,
+            cancel_update_install,
             quit_app
         ])
         .run(tauri::generate_context!())
@@ -843,10 +894,10 @@ mod tests {
 
     use super::{
         ActiveTransfer, AppSettings, DownloadProgress, SequentialQueue, TransferRegistry,
-        claim_registered_transfer, parse_queue_sequence, parse_queue_timestamp,
-        prepare_and_reserve_destination, prepare_destination, proxy_policy, remove_transfer,
-        sanitize_filename, schedule_sleep_duration, validate_destination, validate_task_id,
-        wait_for_queue_turn,
+        begin_update_install_guard, cancel_update_install_guard, claim_registered_transfer,
+        parse_queue_sequence, parse_queue_timestamp, prepare_and_reserve_destination,
+        prepare_destination, proxy_policy, remove_transfer, sanitize_filename,
+        schedule_sleep_duration, validate_destination, validate_task_id, wait_for_queue_turn,
     };
 
     #[test]
@@ -929,6 +980,30 @@ mod tests {
                 .get("duplicate-start")
                 .is_some_and(|item| item.started)
         );
+    }
+
+    #[test]
+    fn update_install_guard_requires_an_idle_registry_and_can_be_released() {
+        let registry = TransferRegistry::default();
+        begin_update_install_guard(&registry).expect("idle registry can enter update mode");
+        assert!(begin_update_install_guard(&registry).is_err());
+        cancel_update_install_guard(&registry).expect("update mode can be cancelled");
+
+        registry
+            .transfers
+            .lock()
+            .expect("transfer registry")
+            .insert(
+                "active-download".into(),
+                ActiveTransfer {
+                    control: quiver_core::DownloadControl::new(),
+                    reservation_keys: std::collections::HashSet::new(),
+                    queue_ticket: None,
+                    scheduled_for_ms: None,
+                    started: true,
+                },
+            );
+        assert!(begin_update_install_guard(&registry).is_err());
     }
 
     #[tokio::test]

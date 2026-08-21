@@ -3,6 +3,11 @@
   "bundle": {
     "createUpdaterArtifacts": true
   },
+  "app": {
+    "security": {
+      "capabilities": ["default", "updater"]
+    }
+  },
   "plugins": {
     "updater": {
       "pubkey": "__TAURI_UPDATER_PUBLIC_KEY__",

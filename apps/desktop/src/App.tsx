@@ -6,6 +6,8 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { MessageKey, translate } from "./i18n";
@@ -116,6 +118,8 @@ type HistorySort = "newest" | "oldest" | "name" | "size";
 
 const APP_STATE_SCHEMA_VERSION = 4;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATER_ENABLED = import.meta.env.VITE_QUIVERDL_UPDATER === "true";
 
 const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "starting",
@@ -297,6 +301,7 @@ function App() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySort, setHistorySort] = useState<HistorySort>("newest");
   const [error, setError] = useState("");
+  const [updateError, setUpdateError] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [choosingDestination, setChoosingDestination] = useState(false);
   const [scheduledStart, setScheduledStart] = useState("");
@@ -332,6 +337,14 @@ function App() {
   const saveAgain = useRef(false);
   const latestSnapshot = useRef<AppSnapshot | null>(null);
   const quitInProgress = useRef(false);
+  const updaterOperation = useRef<"check" | "action" | null>(null);
+  const availableUpdate = useRef<Update | null>(null);
+  const [availableUpdateVersion, setAvailableUpdateVersion] = useState<string | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateDownloaded, setUpdateDownloaded] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateStatus, setUpdateStatus] = useState("");
   const t = (key: MessageKey) => translate(settings.language, key);
 
   useEffect(() => {
@@ -452,6 +465,20 @@ function App() {
     const timer = window.setInterval(prune, 60 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [stateReady, settings.historyRetentionDays]);
+
+  useEffect(() => {
+    if (!stateReady || !UPDATER_ENABLED) return;
+    void checkForUpdates(false);
+    const timer = window.setInterval(() => void checkForUpdates(false), UPDATE_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [stateReady]);
+
+  useEffect(
+    () => () => {
+      void availableUpdate.current?.close();
+    },
+    [],
+  );
 
   useEffect(
     () => () => {
@@ -955,6 +982,126 @@ function App() {
     setHistoryQuery("");
   }
 
+  async function checkForUpdates(reportCurrent: boolean) {
+    if (!UPDATER_ENABLED || updaterOperation.current !== null) return;
+    updaterOperation.current = "check";
+    setUpdateChecking(true);
+    if (reportCurrent) {
+      setUpdateError("");
+      setUpdateStatus(t("checkingForUpdates"));
+    }
+    try {
+      const update = await check({ timeout: 20_000 });
+      setUpdateError("");
+      if (!update) {
+        if (availableUpdate.current) await availableUpdate.current.close();
+        availableUpdate.current = null;
+        setAvailableUpdateVersion(null);
+        setUpdateDownloaded(false);
+        setUpdateProgress(null);
+        if (reportCurrent) setUpdateStatus(t("upToDate"));
+        return;
+      }
+      if (availableUpdate.current?.version === update.version) {
+        await update.close();
+        if (reportCurrent) setUpdateStatus(updateDownloaded ? t("updateReady") : "");
+        return;
+      }
+      if (availableUpdate.current) await availableUpdate.current.close();
+      availableUpdate.current = update;
+      setAvailableUpdateVersion(update.version);
+      setUpdateDownloaded(false);
+      setUpdateProgress(null);
+      setUpdateStatus("");
+    } catch {
+      if (reportCurrent) setUpdateStatus("");
+      if (reportCurrent) setUpdateError(t("updateCheckFailed"));
+    } finally {
+      updaterOperation.current = null;
+      setUpdateChecking(false);
+    }
+  }
+
+  async function downloadAvailableUpdate() {
+    const update = availableUpdate.current;
+    if (!update || updaterOperation.current !== null) return;
+    if (!window.confirm(t("downloadUpdateConfirm"))) return;
+    setUpdateError("");
+    updaterOperation.current = "action";
+    setUpdateBusy(true);
+    setUpdateStatus(t("downloadingUpdate"));
+    setUpdateProgress(null);
+    let downloadedBytes = 0;
+    let contentLength: number | undefined;
+    try {
+      await update.download((event: DownloadEvent) => {
+        if (event.event === "Started") {
+          contentLength = event.data.contentLength;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          if (contentLength && contentLength > 0) {
+            setUpdateProgress(Math.min(100, Math.round((downloadedBytes / contentLength) * 100)));
+          }
+        } else {
+          setUpdateProgress(100);
+        }
+      });
+      setUpdateDownloaded(true);
+      setUpdateStatus(t("updateReady"));
+    } catch {
+      setUpdateError(t("updateDownloadFailed"));
+      setUpdateStatus("");
+    } finally {
+      updaterOperation.current = null;
+      setUpdateBusy(false);
+    }
+  }
+
+  async function flushAppStateForUpdate() {
+    if (saveTimer.current !== null) {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    while (saveInFlight.current) {
+      await new Promise((resolve) => window.setTimeout(resolve, 25));
+    }
+    if (!latestSnapshot.current) throw new Error("App state is not ready");
+    await invoke("save_app_state", { snapshot: latestSnapshot.current });
+  }
+
+  async function installDownloadedUpdate() {
+    const update = availableUpdate.current;
+    if (!update || !updateDownloaded || updaterOperation.current !== null) return;
+    if (downloads.some((item) => ACTIVE_STATUSES.has(item.status))) {
+      setUpdateError(t("updateBlocked"));
+      return;
+    }
+    if (!window.confirm(t("restartUpdateConfirm"))) return;
+    setUpdateError("");
+    updaterOperation.current = "action";
+    setUpdateBusy(true);
+    let gateHeld = false;
+    let installed = false;
+    try {
+      await invoke("begin_update_install");
+      gateHeld = true;
+      await flushAppStateForUpdate();
+      await update.install();
+      installed = true;
+      await relaunch();
+    } catch {
+      if (installed) {
+        setUpdateError(t("updateRestartFailed"));
+        setUpdateStatus(t("updateRestartFailed"));
+      } else {
+        if (gateHeld) await invoke("cancel_update_install").catch(() => undefined);
+        setUpdateError(t("updateInstallFailed"));
+        updaterOperation.current = null;
+        setUpdateBusy(false);
+      }
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -1171,6 +1318,19 @@ function App() {
           <button className="bridge-button" type="button" onClick={() => void revealBrowserBridge()}>
             Browser extension setup
           </button>
+          {UPDATER_ENABLED && (
+            <div className="updater-settings">
+              <button
+                className="bridge-button"
+                type="button"
+                disabled={updateBusy || updateChecking}
+                onClick={() => void checkForUpdates(true)}
+              >
+                {updateChecking ? t("checkingForUpdates") : t("checkForUpdates")}
+              </button>
+              {updateStatus && <small role="status">{updateStatus}</small>}
+            </div>
+          )}
           {bridgeInfo && (
             <div className="bridge-secret">
               <span>Native host</span>
@@ -1191,6 +1351,30 @@ function App() {
           </div>
           <span className="engine-badge"><i /> Engine ready</span>
         </header>
+
+        {UPDATER_ENABLED && availableUpdateVersion && (
+          <section className="update-banner" aria-live="polite">
+            <div>
+              <strong>{t("updateAvailable")} {availableUpdateVersion}</strong>
+              <span>
+                {updateDownloaded
+                  ? t("updateReady")
+                  : updateProgress === null
+                    ? t("signedUpdateHint")
+                    : `${t("downloadingUpdate")} ${updateProgress}%`}
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={updateBusy || updateChecking}
+              onClick={() => void (updateDownloaded
+                ? installDownloadedUpdate()
+                : downloadAvailableUpdate())}
+            >
+              {updateDownloaded ? t("installRestart") : t("downloadUpdate")}
+            </button>
+          </section>
+        )}
 
         <section className="quick-add" aria-labelledby="quick-add-title">
           <div>
@@ -1221,6 +1405,7 @@ function App() {
           </form>
 
           {error && <p className="result error" role="alert">{error}</p>}
+          {updateError && <p className="result error" role="alert">{updateError}</p>}
           {inspection && (
             <div className="inspection-card">
               <div className="inspection-details">

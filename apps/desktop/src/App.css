@@ -181,6 +181,8 @@ nav { display: grid; gap: 5px; }
 .bridge-secret { display: grid; gap: 4px; margin-top: 9px; }
 .bridge-secret span, .bridge-secret small { color: var(--subtle); font-size: 9px; }
 .bridge-secret code { overflow: hidden; color: var(--text); font-size: 9px; text-overflow: ellipsis; }
+.updater-settings { display: grid; gap: 5px; margin-top: 8px; }
+.updater-settings small { color: var(--subtle); line-height: 1.4; }
 
 .workspace { height: 100vh; padding: 31px 38px 38px; overflow: auto; }
 header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 25px; }
@@ -205,6 +207,28 @@ h1 { margin-bottom: 0; font-size: 29px; letter-spacing: -0.8px; }
   border-radius: 50%;
   box-shadow: 0 0 10px color-mix(in srgb, var(--success) 70%, transparent);
 }
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 13px 15px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 13%, var(--panel-solid));
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 11px;
+}
+.update-banner div { display: grid; gap: 3px; margin-right: auto; }
+.update-banner span { color: var(--muted); font-size: 10px; }
+.update-banner button {
+  padding: 8px 11px;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.update-banner button:disabled { opacity: 0.55; cursor: default; }
 
 .quick-add, .downloads-panel {
   background: var(--panel);
@@ -538,4 +562,6 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 20px; }
   .row-actions { grid-column: 2; justify-self: start; }
   .history-toolbar { grid-template-columns: 1fr 1fr; }
   .history-toolbar > label:first-child { grid-column: 1 / -1; }
+  .update-banner { align-items: stretch; flex-direction: column; }
+  .update-banner button { width: 100%; }
 }

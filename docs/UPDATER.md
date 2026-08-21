@@ -1,9 +1,10 @@
 # Secure updater design
 
-QuiverDL's direct-download updater is deliberately disabled in normal builds until a maintainer has
-generated, backed up, and configured a stable Tauri updater key. Store-distributed builds use the
-Microsoft Store or Mac App Store update channel and never bypass marketplace review with the direct
-updater.
+QuiverDL's direct-download updater is enabled only in signed Linux AppImage release builds. Normal,
+development, DEB, RPM, and Store-distributed builds do not receive the updater configuration.
+Microsoft Store and future Mac App Store builds use their marketplace update channels and never
+bypass marketplace review with the direct updater. The first updater-enabled AppImage must be
+installed manually; later AppImage releases can update it in place.
 
 ## Trust and release boundary
 
@@ -15,7 +16,8 @@ updater.
   not allow HTTP, a user-configurable endpoint, unsigned fallback, or runtime public-key replacement.
 - `latest.json` names immutable assets under the matching `v<version>` GitHub release. The manifest
   contains the exact contents of each Tauri `.sig` file, not a path to it, and includes every
-  supported direct-download platform so partial publication fails closed.
+  platform enabled for that direct-update channel so partial publication fails closed. The initial
+  channel contains only `linux-x86_64`.
 - Authenticode and Apple code signing remain required in addition to the updater signature. The
   updater signature authenticates QuiverDL's update channel; operating-system signatures
   authenticate the publisher and package on platforms that support them.
@@ -28,12 +30,14 @@ Windows installer only for a protected direct-release build. `scripts/prepare-up
 materializes an ignored config after decoding and validating `TAURI_UPDATER_PUBLIC_KEY` as the
 canonical Tauri Minisign public-key format, including its packet type and key identifier. It rejects
 private-key material and refuses to overwrite an existing config. Pull-request workflows never
-receive the public/private key pair or enable the updater.
+receive the public/private key pair or enable the updater. At runtime, QuiverDL checks at startup
+and every six hours, but requires consent before downloading and again before installation and
+restart. A Rust-side gate prevents new transfers from racing installation.
 
 ## Manifest generation
 
-`scripts/generate-update-manifest.mjs` accepts exactly the four supported platform artifacts, parses
-each sibling `.sig` as a canonical Tauri Minisign signature, and emits deterministic Tauri static
+`scripts/generate-update-manifest.mjs` accepts an explicit non-empty subset of supported direct
+platforms, parses each sibling `.sig` as a canonical Tauri Minisign signature, and emits deterministic Tauri static
 JSON. It requires the same `TAURI_UPDATER_PUBLIC_KEY` used by the app, streams every artifact through
 BLAKE2b-512, and cryptographically verifies both its Ed25519 artifact signature and trusted-comment
 signature before writing a manifest. Modern prehashed `ED` packets are mandatory so verification
@@ -44,7 +48,7 @@ credentials, HTTP, query strings, fragments, duplicate platform paths/URLs, exis
 artifact-aliased output paths, and any release URL outside this repository. Stable manifests reject
 prerelease versions until a separately named, tested, and published prerelease channel exists.
 
-Example after all signed artifacts have reached draft release `v0.2.0`:
+Example for the initial Linux channel after the signed AppImage reaches draft release `v0.2.0`:
 
 ```powershell
 $env:TAURI_UPDATER_PUBLIC_KEY = (Get-Content C:\secure\quiverdl-updater.key.pub -Raw).Trim()
@@ -52,10 +56,8 @@ node scripts/generate-update-manifest.mjs `
   --version 0.2.0 `
   --base-url https://github.com/Sheekovic/QuiverDL/releases/download/v0.2.0 `
   --output dist/latest.json `
-  --artifact windows-x86_64=dist/QuiverDL-0.2.0-setup.exe `
-  --artifact linux-x86_64=dist/QuiverDL-0.2.0.AppImage `
-  --artifact darwin-x86_64=dist/QuiverDL-0.2.0-x86_64.app.tar.gz `
-  --artifact darwin-aarch64=dist/QuiverDL-0.2.0-aarch64.app.tar.gz
+  --platform linux-x86_64 `
+  --artifact linux-x86_64=dist/QuiverDL-0.2.0.AppImage
 ```
 
 Upload the generated manifest only after verifying every updater signature, OS signature,
