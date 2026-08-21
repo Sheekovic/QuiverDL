@@ -1007,6 +1007,7 @@ function App() {
       setUpdateProgress(null);
       setUpdateStatus("");
     } catch {
+      if (reportCurrent) setUpdateStatus("");
       if (reportCurrent) setError(t("updateCheckFailed"));
     } finally {
       updaterCheckInFlight.current = false;
