@@ -3,7 +3,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repository = path.resolve(
+  process.env.QUIVERDL_RELEASE_REPOSITORY
+    ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+);
 const readJson = async (...parts) => JSON.parse(await readFile(path.join(repository, ...parts), "utf8"));
 
 function tomlSection(document, name) {
@@ -33,7 +36,9 @@ function tomlStringArray(section, key) {
 
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
+const releaseConfig = await readJson("release-please-config.json");
 const releaseManifest = await readJson(".release-please-manifest.json");
+const releaseVersion = (await readFile(path.join(repository, "version.txt"), "utf8")).trim();
 const microsoft = await readJson(
   "apps",
   "desktop",
@@ -66,6 +71,13 @@ assert.equal(firefox.manifest_version, 3);
 assert.equal(chromium.version, desktop.version, "Chromium and desktop versions must match");
 assert.equal(firefox.version, desktop.version, "Firefox and desktop versions must match");
 assert.equal(desktopPackage.version, desktop.version, "npm and Tauri versions must match");
+assert.equal(releaseConfig["release-type"], "simple", "Release Please must avoid Cargo workspace strategies");
+assert.equal(
+  releaseConfig.packages?.["."]?.["version-file"],
+  "version.txt",
+  "Release Please must update the release version file",
+);
+assert.equal(releaseVersion, desktop.version, "Release version file and Tauri versions must match");
 assert.equal(
   releaseManifest["."],
   desktop.version,
