@@ -7,9 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: prepare-release
@@ -20,10 +18,19 @@ jobs:
     name: Open or update the reviewed release PR
     runs-on: ubuntu-latest
     steps:
+      - name: Require the release automation token
+        env:
+          RELEASE_TOKEN_CONFIGURED: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
+        shell: bash
+        run: |
+          if [[ "$RELEASE_TOKEN_CONFIGURED" != "true" ]]; then
+            echo "::error::Add the RELEASE_PLEASE_TOKEN repository secret with Contents, Pull requests, and Issues write access."
+            exit 1
+          fi
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
       - name: Resolve the generated release branch
         id: release-branch
         if: steps.release.outputs.prs_created == 'true'
@@ -41,7 +48,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ steps.release-branch.outputs.name }}
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
       - name: Check out trusted release tools
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.release.outputs.prs_created == 'true'
@@ -78,7 +85,7 @@ jobs:
         if: steps.synchronize.outputs.changed == 'true'
         env:
           RELEASE_BRANCH: ${{ steps.release-branch.outputs.name }}
-          RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         shell: bash
         run: |
           test -n "$RELEASE_TOKEN"

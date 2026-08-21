@@ -15,10 +15,10 @@ bundle build without receiving signing credentials.
 
 Signed direct-download Windows and macOS packages remain optional jobs. They run only when the repository variable `ENABLE_SIGNED_RELEASES` is set to `true`; Windows certificate and Apple Developer credentials are then required in the protected `release` environment. The Linux release does not wait for those credentials. Standalone macOS host archives are submitted to Apple notarization after the host is signed.
 
-Release PR creation requires either a fine-grained `RELEASE_PLEASE_TOKEN` repository secret with
-Contents, Pull requests, and Issues write access (recommended, because its commits can trigger follow-up CI),
-or the repository's **Allow GitHub Actions to create and approve pull requests** setting. The
-workflow falls back to `GITHUB_TOKEN` only when the dedicated secret is absent.
+End-to-end release automation requires a fine-grained `RELEASE_PLEASE_TOKEN` repository secret with
+Contents, Pull requests, and Issues write access. A PR created with `GITHUB_TOKEN` does not trigger
+follow-up CI, and the reviewed version-tag workflow also requires the dedicated token, so the
+workflow fails early instead of offering a partial fallback.
 
 The same tagged workflow creates deterministic unsigned Chrome Web Store and Firefox AMO submission
 archives. Microsoft Store and strict-confined Snap Store packaging, validation, and owner submission

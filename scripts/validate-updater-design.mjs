@@ -112,6 +112,12 @@ assert.doesNotMatch(
   "skipped release steps must not parse an empty action output",
 );
 assert.match(releasePleaseWorkflow, /jq -er '\.headBranchName \| strings'/);
+assert.doesNotMatch(
+  releasePleaseWorkflow,
+  /secrets\.GITHUB_TOKEN/,
+  "release automation must use the dedicated workflow-triggering token",
+);
+assert.match(releasePleaseWorkflow, /permissions:\s*\n\s+contents: read/);
 assert.equal(
   (releasePleaseWorkflow.match(/persist-credentials: false/g) ?? []).length,
   2,
