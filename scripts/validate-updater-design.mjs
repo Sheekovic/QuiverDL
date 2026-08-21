@@ -108,14 +108,25 @@ assert.match(
 assert.match(releaseWorkflow, /test "\$RELEASE_TAG" = "v\$\(cat version\.txt\)"/);
 assert.match(releaseWorkflow, /git cat-file -t "\$tag_ref"/);
 assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$tag_commit" FETCH_HEAD/);
+assert.match(releaseWorkflow, /release_commit: \$\{\{ steps\.release-identity\.outputs\.commit \}\}/);
+assert.ok(
+  releaseWorkflow.indexOf("name: Require an annotated tag on reviewed main history")
+    < releaseWorkflow.indexOf("uses: actions/setup-node"),
+  "the tag trust boundary must run before checked-out repository code",
+);
 assert.equal(
   (
     releaseWorkflow.match(
       /ref: \$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', inputs\.tag\) \|\| github\.ref \}\}/g,
     ) ?? []
   ).length,
-  4,
-  "every publishing checkout must select the validated dispatch tag",
+  1,
+  "only preflight may resolve the selected dispatch tag",
+);
+assert.equal(
+  (releaseWorkflow.match(/ref: \$\{\{ needs\.preflight\.outputs\.release_commit \}\}/g) ?? []).length,
+  3,
+  "every publishing checkout must pin the commit validated by preflight",
 );
 assert.equal(
   (releaseWorkflow.match(/!target\/\*\*\/bundle/g) ?? []).length,
