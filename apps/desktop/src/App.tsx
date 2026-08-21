@@ -341,6 +341,7 @@ function App() {
   const availableUpdate = useRef<Update | null>(null);
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState<string | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const updateBusyRef = useRef(false);
   const [updateDownloaded, setUpdateDownloaded] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateStatus, setUpdateStatus] = useState("");
@@ -982,7 +983,7 @@ function App() {
   }
 
   async function checkForUpdates(reportCurrent: boolean) {
-    if (!UPDATER_ENABLED || updaterCheckInFlight.current || updateBusy) return;
+    if (!UPDATER_ENABLED || updaterCheckInFlight.current || updateBusyRef.current) return;
     updaterCheckInFlight.current = true;
     if (reportCurrent) {
       setUpdateError("");
@@ -1021,9 +1022,10 @@ function App() {
 
   async function downloadAvailableUpdate() {
     const update = availableUpdate.current;
-    if (!update || updateBusy) return;
+    if (!update || updateBusyRef.current) return;
     if (!window.confirm(t("downloadUpdateConfirm"))) return;
     setUpdateError("");
+    updateBusyRef.current = true;
     setUpdateBusy(true);
     setUpdateStatus(t("downloadingUpdate"));
     setUpdateProgress(null);
@@ -1048,6 +1050,7 @@ function App() {
       setUpdateError(t("updateDownloadFailed"));
       setUpdateStatus("");
     } finally {
+      updateBusyRef.current = false;
       setUpdateBusy(false);
     }
   }
@@ -1066,13 +1069,14 @@ function App() {
 
   async function installDownloadedUpdate() {
     const update = availableUpdate.current;
-    if (!update || !updateDownloaded || updateBusy) return;
+    if (!update || !updateDownloaded || updateBusyRef.current) return;
     if (downloads.some((item) => ACTIVE_STATUSES.has(item.status))) {
       setUpdateError(t("updateBlocked"));
       return;
     }
     if (!window.confirm(t("restartUpdateConfirm"))) return;
     setUpdateError("");
+    updateBusyRef.current = true;
     setUpdateBusy(true);
     let gateHeld = false;
     let installed = false;
@@ -1090,6 +1094,7 @@ function App() {
       } else {
         if (gateHeld) await invoke("cancel_update_install").catch(() => undefined);
         setUpdateError(t("updateInstallFailed"));
+        updateBusyRef.current = false;
         setUpdateBusy(false);
       }
     }
