@@ -268,10 +268,8 @@ function pruneCompletedHistory(
   if (retentionDays === null) return items;
   const cutoff = now - retentionDays * DAY_MS;
   return items.filter((item) => {
-    if (item.status !== "completed") return true;
-    const retentionTimestamp = item.completedAtMs ?? item.queuedAtMs;
-    if (!retentionTimestamp) return true;
-    return Number(retentionTimestamp) >= cutoff;
+    if (item.status !== "completed" || item.completedAtMs === null) return true;
+    return Number(item.completedAtMs) >= cutoff;
   });
 }
 
@@ -1051,6 +1049,7 @@ function App() {
               <option value="90">{t("keepNinetyDays")}</option>
             </select>
           </label>
+          <small className="queue-help">{t("historyRetentionHint")}</small>
           <fieldset className="proxy-settings">
             <legend>Proxy</legend>
             <label>
