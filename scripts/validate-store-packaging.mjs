@@ -50,7 +50,10 @@ const cargoMembers = await Promise.all(cargoMemberPaths.map(async (member) => {
   assert.match(member, /^[A-Za-z0-9._/-]+$/, "Cargo member path contains unsafe characters");
   const memberDirectory = path.resolve(repository, ...member.split("/"));
   assert.ok(memberDirectory.startsWith(`${repository}${path.sep}`), "Cargo member escapes the repository");
-  return readFile(path.join(memberDirectory, "Cargo.toml"), "utf8");
+  return {
+    document: await readFile(path.join(memberDirectory, "Cargo.toml"), "utf8"),
+    member,
+  };
 }));
 const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
 const msixManifest = await readFile(
@@ -75,9 +78,9 @@ assert.equal(
 );
 for (const cargoMember of cargoMembers) {
   assert.equal(
-    tomlString(tomlSection(cargoMember, "package"), "version"),
+    tomlString(tomlSection(cargoMember.document, "package"), "version"),
     desktop.version,
-    "Every Cargo package and Tauri version must match",
+    `Cargo member ${cargoMember.member} and Tauri versions must match`,
   );
 }
 assert.equal(
