@@ -19,6 +19,11 @@ const chromium = await readJson("extensions", "chromium", "manifest.json");
 const firefox = await readJson("extensions", "firefox", "manifest.json");
 const firefoxHost = await readJson("extensions", "native-host", "firefox-host.json");
 const cargoWorkspace = await readFile(path.join(repository, "Cargo.toml"), "utf8");
+const cargoMembers = await Promise.all([
+  readFile(path.join(repository, "apps", "desktop", "src-tauri", "Cargo.toml"), "utf8"),
+  readFile(path.join(repository, "crates", "quiver-core", "Cargo.toml"), "utf8"),
+  readFile(path.join(repository, "crates", "quiver-native-host", "Cargo.toml"), "utf8"),
+]);
 const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
 const msixManifest = await readFile(
   path.join(repository, "packaging", "windows", "msix", "AppxManifest.xml.template"),
@@ -40,6 +45,13 @@ assert.match(
   new RegExp(`\\[workspace\\.package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
   "Cargo workspace and Tauri versions must match",
 );
+for (const cargoMember of cargoMembers) {
+  assert.match(
+    cargoMember,
+    new RegExp(`\\[package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
+    "Every Cargo package and Tauri version must match",
+  );
+}
 assert.equal(
   firefox.browser_specific_settings?.gecko?.id,
   "quiverdl@quiverdl.app",
