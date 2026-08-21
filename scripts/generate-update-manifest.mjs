@@ -176,13 +176,26 @@ async function platformEntry(platform, artifactPath, baseUrl, updaterKey) {
   };
 }
 
-export async function generateManifest({ version, baseUrl, artifacts, publicKey }) {
+function selectedPlatforms(platforms) {
+  const selected = platforms?.length ? [...platforms].sort() : [...SUPPORTED_PLATFORMS];
+  if (
+    selected.length === 0 ||
+    new Set(selected).size !== selected.length ||
+    selected.some((platform) => !SUPPORTED_PLATFORMS.includes(platform))
+  ) {
+    throw new Error(`Platforms must be a unique subset of: ${SUPPORTED_PLATFORMS.join(", ")}`);
+  }
+  return selected;
+}
+
+export async function generateManifest({ version, baseUrl, artifacts, publicKey, platforms }) {
   parseVersion(version);
   const canonicalBaseUrl = validateBaseUrl(baseUrl, version);
   const updaterKey = parseUpdaterPublicKey(publicKey ?? "");
+  const requiredPlatforms = selectedPlatforms(platforms);
   const keys = Object.keys(artifacts).sort();
-  if (keys.join("\n") !== SUPPORTED_PLATFORMS.join("\n")) {
-    throw new Error(`Artifacts must include exactly: ${SUPPORTED_PLATFORMS.join(", ")}`);
+  if (keys.join("\n") !== requiredPlatforms.join("\n")) {
+    throw new Error(`Artifacts must include exactly: ${requiredPlatforms.join(", ")}`);
   }
   const pathKeys = [];
   const identityKeys = [];
@@ -207,27 +220,27 @@ export async function generateManifest({ version, baseUrl, artifacts, publicKey 
   if (new Set(allSignedInputIdentities).size !== allSignedInputIdentities.length) {
     throw new Error("Every updater artifact and signature must use a distinct file identity");
   }
-  const platforms = {};
+  const platformEntries = {};
   const urls = new Set();
   const signatures = new Set();
   const signingKeyIds = new Set();
-  for (const platform of SUPPORTED_PLATFORMS) {
+  for (const platform of requiredPlatforms) {
     const validated = await platformEntry(
       platform,
       artifacts[platform],
       canonicalBaseUrl,
       updaterKey,
     );
-    platforms[platform] = validated.entry;
+    platformEntries[platform] = validated.entry;
     signingKeyIds.add(validated.keyId);
-    if (urls.has(platforms[platform].url)) {
+    if (urls.has(platformEntries[platform].url)) {
       throw new Error("Each platform must produce a distinct updater artifact URL");
     }
-    if (signatures.has(platforms[platform].signature)) {
+    if (signatures.has(platformEntries[platform].signature)) {
       throw new Error("Each platform must use a distinct updater signature");
     }
-    urls.add(platforms[platform].url);
-    signatures.add(platforms[platform].signature);
+    urls.add(platformEntries[platform].url);
+    signatures.add(platformEntries[platform].signature);
   }
   if (signingKeyIds.size !== 1) {
     throw new Error("Every platform must be signed by the same updater key identifier");
@@ -235,7 +248,7 @@ export async function generateManifest({ version, baseUrl, artifacts, publicKey 
   return {
     version,
     notes: `QuiverDL ${version}. Verify the release notes before installing.`,
-    platforms,
+    platforms: platformEntries,
   };
 }
 
@@ -267,7 +280,7 @@ export async function writeNewManifest(output, bytes, artifacts) {
 }
 
 function parseArguments(arguments_) {
-  const options = { artifacts: {} };
+  const options = { artifacts: {}, platforms: [] };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     const value = arguments_[index + 1];
@@ -285,12 +298,15 @@ function parseArguments(arguments_) {
       }
       options.artifacts[platform] = path.resolve(value.slice(separator + 1));
       index += 1;
+    } else if (argument === "--platform" && value) {
+      options.platforms.push(value);
+      index += 1;
     } else {
       throw new Error(`Unknown or incomplete argument: ${argument}`);
     }
   }
   if (!options.version || !options.baseUrl || !options.output) {
-    throw new Error("--version, --base-url, --output, and all platform artifacts are required");
+    throw new Error("--version, --base-url, --output, and platform artifacts are required");
   }
   return options;
 }

@@ -63,6 +63,48 @@ test("creates a deterministic complete updater manifest", async () => {
   }
 });
 
+test("creates a signed Linux-only manifest for the first direct update channel", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const allArtifacts = await fixture(directory);
+    const artifacts = { "linux-x86_64": allArtifacts["linux-x86_64"] };
+    const manifest = await generateManifest({
+      version: "1.2.3",
+      baseUrl: "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3",
+      artifacts,
+      platforms: ["linux-x86_64"],
+      publicKey: updaterPublicKey,
+    });
+    assert.deepEqual(Object.keys(manifest.platforms), ["linux-x86_64"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects unknown or duplicate requested updater platforms", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
+  try {
+    const allArtifacts = await fixture(directory);
+    const artifacts = { "linux-x86_64": allArtifacts["linux-x86_64"] };
+    const options = {
+      version: "1.2.3",
+      baseUrl: "https://github.com/Sheekovic/QuiverDL/releases/download/v1.2.3",
+      artifacts,
+      publicKey: updaterPublicKey,
+    };
+    await assert.rejects(
+      generateManifest({ ...options, platforms: ["linux-aarch64"] }),
+      /unique subset/,
+    );
+    await assert.rejects(
+      generateManifest({ ...options, platforms: ["linux-x86_64", "linux-x86_64"] }),
+      /unique subset/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects insecure origins and incomplete platform sets", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "quiverdl-updater-test-"));
   try {

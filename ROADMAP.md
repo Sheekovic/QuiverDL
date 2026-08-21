@@ -53,6 +53,7 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 - [x] Metalink and BitTorrent evaluation behind separate threat models
 - [x] Store packaging for browser extensions and operating-system app stores
 - [x] Automated updater design with rollback and signature verification
+- [x] Signed Linux AppImage update checks and reviewed automatic release PRs
 
 ## Good first contributions
 

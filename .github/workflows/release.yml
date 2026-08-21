@@ -7,6 +7,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release.yml"
+      - "apps/desktop/src-tauri/tauri.updater.conf.json.template"
+      - "scripts/generate-update-manifest.mjs"
+      - "scripts/prepare-updater-config.mjs"
 
 permissions:
   contents: write
@@ -27,9 +30,10 @@ jobs:
       - name: Require tag, desktop, extension, and store versions to match
         run: node scripts/validate-store-packaging.mjs
 
-  linux:
-    name: Linux x64 packages
+  linux-validate:
+    name: Validate Linux x64 packages
     needs: preflight
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,25 +54,74 @@ jobs:
         working-directory: apps/desktop
       - name: Build native messaging host
         run: cargo build --locked --release -p quiver-native-host --target x86_64-unknown-linux-gnu
-      - name: Validate Linux bundles on pull requests
-        if: github.event_name == 'pull_request'
+      - name: Validate Linux bundles
         run: npm run tauri -- build --bundles deb,rpm,appimage
         working-directory: apps/desktop
-      - name: Build and publish Linux bundles
-        if: github.event_name == 'push'
-        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux:
+    name: Signed Linux x64 packages
+    needs: preflight
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: QuiverDL ${{ github.ref_name }}
-          releaseBody: Linux packages are available below. Windows is available from Microsoft Store; signed direct-download packages for Windows and macOS will be added separately.
-          releaseDraft: true
-          prerelease: false
-          args: --bundles deb,rpm,appimage
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-18
+        with:
+          targets: x86_64-unknown-linux-gnu
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: apps/desktop
+      - name: Build native messaging host
+        run: cargo build --locked --release -p quiver-native-host --target x86_64-unknown-linux-gnu
+      - name: Require protected updater signing inputs
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          test -n "$TAURI_UPDATER_PUBLIC_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          test -n "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+      - name: Prepare fail-closed updater configuration
+        env:
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: node scripts/prepare-updater-config.mjs
+      - name: Build package-manager Linux bundles without the direct updater
+        run: npm run tauri -- build --bundles deb,rpm
+        working-directory: apps/desktop
+      - name: Build the signed updater-enabled AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_QUIVERDL_UPDATER: "true"
+        run: npm run tauri -- build --bundles appimage --config src-tauri/tauri.updater.conf.json
+        working-directory: apps/desktop
+      - name: Create the draft release and upload Linux bundles
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            test "$(gh release view "${{ github.ref_name }}" --json isDraft --jq .isDraft)" = "true"
+          else
+            gh release create "${{ github.ref_name }}" --draft --title "QuiverDL ${{ github.ref_name }}" --notes "Linux packages are available below. Windows is available from Microsoft Store."
+          fi
+          mapfile -d '' bundles < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
+          test "${#bundles[@]}" -eq 3
+          appimage="$(printf '%s\n' "${bundles[@]}" | grep '\.AppImage$')"
+          test -f "$appimage.sig"
+          gh release upload "${{ github.ref_name }}" "${bundles[@]}" "$appimage.sig" --clobber
       - name: Attach Linux bundle checksums
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -80,7 +133,6 @@ jobs:
           test -s "$checksum_file"
           gh release upload "${{ github.ref_name }}" "$checksum_file" --clobber
       - name: Attach Linux native messaging host archive
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -96,6 +148,23 @@ jobs:
           archive_name=$(basename "$archive")
           (cd "$archive_dir" && sha256sum "$archive_name") > "$archive.sha256"
           gh release upload "${{ github.ref_name }}" "$archive" "$archive.sha256" --clobber
+      - name: Publish the verified updater manifest last
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          appimage="$(find . -type f -path '*/release/bundle/appimage/*.AppImage' -print -quit)"
+          test -n "$appimage"
+          manifest="$RUNNER_TEMP/latest.json"
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/generate-update-manifest.mjs \
+            --version "$version" \
+            --base-url "https://github.com/Sheekovic/QuiverDL/releases/download/$GITHUB_REF_NAME" \
+            --output "$manifest" \
+            --platform linux-x86_64 \
+            --artifact "linux-x86_64=$appimage"
+          gh release upload "$GITHUB_REF_NAME" "$manifest" --clobber
 
   publish-linux:
     name: Publish Linux release
