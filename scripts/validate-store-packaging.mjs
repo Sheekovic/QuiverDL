@@ -33,7 +33,9 @@ function tomlStringArray(section, key) {
 
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
+const releaseConfig = await readJson("release-please-config.json");
 const releaseManifest = await readJson(".release-please-manifest.json");
+const releaseVersion = (await readFile(path.join(repository, "version.txt"), "utf8")).trim();
 const microsoft = await readJson(
   "apps",
   "desktop",
@@ -66,6 +68,8 @@ assert.equal(firefox.manifest_version, 3);
 assert.equal(chromium.version, desktop.version, "Chromium and desktop versions must match");
 assert.equal(firefox.version, desktop.version, "Firefox and desktop versions must match");
 assert.equal(desktopPackage.version, desktop.version, "npm and Tauri versions must match");
+assert.equal(releaseConfig["release-type"], "simple", "Release Please must avoid Cargo workspace strategies");
+assert.equal(releaseVersion, desktop.version, "Release version file and Tauri versions must match");
 assert.equal(
   releaseManifest["."],
   desktop.version,

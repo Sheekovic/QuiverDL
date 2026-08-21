@@ -3,7 +3,9 @@
 QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. Release
 Please opens a draft version PR after reviewed changes reach `main`; that PR must pass normal review
 and CI. Merging the reviewed version PR updates the release manifest, and `version-tag.yml` creates
-the matching annotated tag exactly once. Linux then uses locked Cargo and npm dependency graphs,
+the matching annotated tag exactly once. The workspace-safe release strategy updates every declared
+version file, then `sync-release-lockfile.mjs` deterministically updates the three local Cargo.lock
+package entries on the release branch before CI starts. Linux then uses locked Cargo and npm dependency graphs,
 creates DEB, RPM, and a signed updater-enabled AppImage plus a native-host archive, verifies the
 updater signature, attaches SHA-256 checksums, uploads `latest.json` last, and publishes the
 validated draft. Pull requests that change the release workflow perform a complete unsigned Linux

@@ -62,6 +62,12 @@ const releaseWorkflow = await readFile(path.join(
   "workflows",
   "release.yml",
 ), "utf8");
+const releasePleaseWorkflow = await readFile(path.join(
+  repository,
+  ".github",
+  "workflows",
+  "release-please.yml",
+), "utf8");
 assert.equal((template.match(/__TAURI_UPDATER_PUBLIC_KEY__/g) ?? []).length, 1);
 const parsed = JSON.parse(template.replace("__TAURI_UPDATER_PUBLIC_KEY__", "TEST-PUBLIC-KEY"));
 assert.equal(parsed.bundle.createUpdaterArtifacts, true);
@@ -99,4 +105,5 @@ assert.equal(
   2,
   "release caches must exclude stale Tauri bundle outputs",
 );
+assert.match(releasePleaseWorkflow, /scripts\/sync-release-lockfile\.mjs/);
 process.stdout.write("Updater design is fail-closed and uses the canonical HTTPS endpoint.\n");
