@@ -6,6 +6,7 @@
 [![License: GPL v3 or later](https://img.shields.io/badge/License-GPL_v3%2B-blue.svg)](LICENSE)
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Get it from Microsoft](https://img.shields.io/badge/Get_it_from-Microsoft_Store-0078D4?logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9MVB2DD54NF4)
+[![GitHub release](https://img.shields.io/github/v/release/Sheekovic/QuiverDL?label=Linux)](https://github.com/Sheekovic/QuiverDL/releases/latest)
 
 [Website](https://sheekovic.github.io/QuiverDL/) ·
 [Microsoft Store](https://apps.microsoft.com/detail/9MVB2DD54NF4) ·
@@ -28,6 +29,12 @@ native Rust engine with a lightweight Tauri and React desktop application.
 The Microsoft Store is currently the recommended installation method. Direct installer and
 portable downloads from GitHub remain pending independent code-signing credentials and final
 clean-machine validation.
+
+## Install on Linux
+
+[Download the latest AppImage, Debian, or RPM package](https://github.com/Sheekovic/QuiverDL/releases/latest).
+Verify the downloaded package against `SHA256SUMS-linux-x64.txt` from the same release before
+installing it. Linux packages are currently built for x64 systems.
 
 ## Why QuiverDL?
 

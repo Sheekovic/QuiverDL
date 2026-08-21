@@ -1,6 +1,8 @@
 # Release process
 
-QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. The workflow uses locked Cargo and npm dependency graphs, builds on each target operating system, creates Windows NSIS/MSI installers plus a portable archive, Linux DEB/RPM/AppImage packages, macOS app/DMG bundles for Intel and Apple Silicon, and native-host archives with portable SHA-256 checksum files. Standalone macOS host archives are submitted to Apple notarization after the host is signed. Releases begin as drafts so a maintainer can inspect every asset before publishing.
+QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. Linux is an independent release path: the workflow uses locked Cargo and npm dependency graphs, creates DEB, RPM, and AppImage packages plus a native-host archive, attaches SHA-256 checksums, and publishes the validated draft. Pull requests that change the release workflow perform a complete Linux bundle build before merging.
+
+Signed direct-download Windows and macOS packages remain optional jobs. They run only when the repository variable `ENABLE_SIGNED_RELEASES` is set to `true`; Windows certificate and Apple Developer credentials are then required in the protected `release` environment. The Linux release does not wait for those credentials. Standalone macOS host archives are submitted to Apple notarization after the host is signed.
 
 The same tagged workflow creates deterministic unsigned Chrome Web Store and Firefox AMO submission
 archives. Microsoft Store and strict-confined Snap Store packaging, validation, and owner submission
@@ -14,7 +16,7 @@ Windows users who install the NSIS or MSI desktop package and want browser integ
 
 Create a protected GitHub environment named `release`. Add `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. Add `APPLE_CERTIFICATE` (base64 Developer ID Application P12), `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific password), and `APPLE_TEAM_ID`. Require maintainer approval for the environment.
 
-The workflow deliberately fails instead of publishing unsigned Windows or unnotarized macOS release artifacts. Certificates and account credentials cannot be supplied by source code; the repository owner must obtain them from an appropriate certificate authority and Apple Developer account.
+Set the repository variable `ENABLE_SIGNED_RELEASES` to `true` only after those credentials are ready. The signed jobs deliberately fail instead of publishing unsigned Windows or unnotarized macOS release artifacts. Certificates and account credentials cannot be supplied by source code; the repository owner must obtain them from an appropriate certificate authority and Apple Developer account.
 
 Direct-download update signing is a separate trust root from operating-system code signing. Follow
 the [secure updater design](UPDATER.md): generate and back up the Tauri key offline, add the encrypted
@@ -27,7 +29,8 @@ builds use their marketplace update channel.
 1. Confirm CI is green and `ROADMAP.md`, `CHANGELOG.md`, Cargo, npm, and Tauri versions agree.
 2. Run the development checks in `README.md` and `cargo bench -p quiver-core --bench transfer_baseline`.
 3. Create and push an annotated tag, for example `git tag -a v0.1.0 -m "QuiverDL 0.1.0"` and `git push origin v0.1.0`.
-4. Approve the protected release environment. Inspect signatures, notarization, checksums, install/uninstall behavior, extension pairing, and a clean-machine download test.
-5. Add human-readable release notes and publish the draft.
+4. Confirm the Linux workflow publishes the release with AppImage, DEB, RPM, native-host, and checksum assets.
+5. Perform a clean-machine Linux download and launch test, then add any additional human-readable release notes.
+6. When signed direct downloads are enabled, approve the protected release environment and inspect signatures, notarization, install/uninstall behavior, extension pairing, and clean-machine tests.
 
 Never test signing with production keys on pull requests or upload certificates as artifacts.
