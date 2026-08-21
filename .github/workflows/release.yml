@@ -24,11 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - name: Require tag, desktop, extension, and store versions to match
         run: node scripts/validate-store-packaging.mjs
+      - name: Require an annotated tag on reviewed main history
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          test "$(git cat-file -t "$GITHUB_REF")" = "tag"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
   linux-validate:
     name: Validate Linux x64 packages

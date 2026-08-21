@@ -8,6 +8,7 @@ const readJson = async (...parts) => JSON.parse(await readFile(path.join(reposit
 
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
+const releaseManifest = await readJson(".release-please-manifest.json");
 const microsoft = await readJson(
   "apps",
   "desktop",
@@ -29,6 +30,11 @@ assert.equal(firefox.manifest_version, 3);
 assert.equal(chromium.version, desktop.version, "Chromium and desktop versions must match");
 assert.equal(firefox.version, desktop.version, "Firefox and desktop versions must match");
 assert.equal(desktopPackage.version, desktop.version, "npm and Tauri versions must match");
+assert.equal(
+  releaseManifest["."],
+  desktop.version,
+  "Release Please manifest and desktop versions must match",
+);
 assert.match(
   cargoWorkspace,
   new RegExp(`\\[workspace\\.package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
