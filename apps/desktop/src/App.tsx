@@ -57,9 +57,10 @@ type DownloadItem = {
   resumed?: boolean;
   error?: string;
   recoverable?: boolean;
-  queuedAtMs: string;
+  queuedAtMs: string | null;
   scheduledForMs: string | null;
   queueSequence: string | null;
+  completedAtMs: string | null;
 };
 
 type AppSettings = {
@@ -74,6 +75,7 @@ type AppSettings = {
   perDownloadSpeedLimitBps: number | null;
   globalSpeedLimitBps: number | null;
   queueMode: "parallel" | "sequential";
+  historyRetentionDays: 7 | 30 | 90 | null;
   proxyMode: "disabled" | "system" | "custom";
   proxyUrl: string;
   proxyUsername: string;
@@ -110,6 +112,10 @@ type BrowserBridgeInfo = {
 };
 
 type Filter = "all" | "active" | "completed" | "failed";
+type HistorySort = "newest" | "oldest" | "name" | "size";
+
+const APP_STATE_SCHEMA_VERSION = 4;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "starting",
@@ -150,6 +156,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   perDownloadSpeedLimitBps: null,
   globalSpeedLimitBps: null,
   queueMode: "parallel",
+  historyRetentionDays: null,
   proxyMode: "disabled",
   proxyUrl: "",
   proxyUsername: "",
@@ -230,6 +237,49 @@ function compareQueueOrder(left: DownloadItem, right: DownloadItem) {
   return left.id.localeCompare(right.id);
 }
 
+function completedTimestamp(item: DownloadItem) {
+  return item.completedAtMs === null ? null : Number(item.completedAtMs);
+}
+
+function compareHistory(left: DownloadItem, right: DownloadItem, sort: HistorySort) {
+  if (sort === "name") return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+  if (sort === "size") {
+    const sizeOrder = right.downloadedBytes < left.downloadedBytes
+      ? -1
+      : right.downloadedBytes > left.downloadedBytes ? 1 : 0;
+    return sizeOrder || left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+  }
+
+  const leftTimestamp = completedTimestamp(left);
+  const rightTimestamp = completedTimestamp(right);
+  if (leftTimestamp === null && rightTimestamp === null) return left.name.localeCompare(right.name);
+  if (leftTimestamp === null) return 1;
+  if (rightTimestamp === null) return -1;
+  return sort === "oldest"
+    ? leftTimestamp - rightTimestamp
+    : rightTimestamp - leftTimestamp;
+}
+
+function pruneCompletedHistory(
+  items: DownloadItem[],
+  retentionDays: AppSettings["historyRetentionDays"],
+  now = Date.now(),
+) {
+  if (retentionDays === null) return items;
+  const cutoff = now - retentionDays * DAY_MS;
+  return items.filter((item) => {
+    if (item.status !== "completed" || item.completedAtMs === null) return true;
+    return Number(item.completedAtMs) >= cutoff;
+  });
+}
+
+function formatHistoryTime(timestamp: string, language: AppSettings["language"]) {
+  return new Intl.DateTimeFormat(language === "ar" ? "ar" : "en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(Number(timestamp)));
+}
+
 const MAX_QUEUE_SEQUENCE = (1n << 64n) - 1n;
 
 function formatScheduledTime(timestamp: string) {
@@ -244,6 +294,8 @@ function App() {
   const [inspection, setInspection] = useState<LinkInspection | null>(null);
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historySort, setHistorySort] = useState<HistorySort>("newest");
   const [error, setError] = useState("");
   const [inspecting, setInspecting] = useState(false);
   const [choosingDestination, setChoosingDestination] = useState(false);
@@ -289,12 +341,12 @@ function App() {
         if (!active) return;
         setSettings(snapshot.settings);
         setProxyDraft(proxyDraftFromSettings(snapshot.settings));
-        const restored = snapshot.downloads.map((item) => ({
+        const restored = pruneCompletedHistory(snapshot.downloads.map((item) => ({
           ...item,
           downloadedBytes: BigInt(item.downloadedBytes),
           totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
           recoverable: item.status === "paused",
-        }));
+        })), snapshot.settings.historyRetentionDays);
         nextQueueSequence.current = restored.reduce((next, item) => {
           if (item.queueSequence === null) return next;
           const sequence = BigInt(item.queueSequence);
@@ -352,7 +404,7 @@ function App() {
 
   useEffect(() => {
     latestSnapshot.current = {
-      schemaVersion: 3,
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
       settings,
       downloads: downloads.map(({ recoverable: _recoverable, ...item }) => ({
         ...item,
@@ -389,6 +441,17 @@ function App() {
       })();
     }, 500);
   }, [downloads, settings]);
+
+  useEffect(() => {
+    if (!stateReady || settings.historyRetentionDays === null) return;
+    const prune = () => setDownloads((current) => {
+      const retained = pruneCompletedHistory(current, settings.historyRetentionDays);
+      return retained.length === current.length ? current : retained;
+    });
+    prune();
+    const timer = window.setInterval(prune, 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [stateReady, settings.historyRetentionDays]);
 
   useEffect(
     () => () => {
@@ -481,18 +544,22 @@ function App() {
     [downloads],
   );
 
-  const visibleDownloads = useMemo(
-    () =>
-      downloads.filter((item) => {
+  const visibleDownloads = useMemo(() => {
+    const filtered = downloads.filter((item) => {
         if (filter === "active") return ACTIVE_STATUSES.has(item.status);
         if (filter === "completed") return item.status === "completed";
         if (filter === "failed") {
           return item.status === "failed" || item.status === "cancelled";
         }
         return true;
-      }),
-    [downloads, filter],
-  );
+      });
+    if (filter !== "completed") return filtered;
+    const query = historyQuery.trim().toLocaleLowerCase();
+    return filtered
+      .filter((item) => !query || [item.name, item.destination, item.url]
+        .some((value) => value.toLocaleLowerCase().includes(query)))
+      .sort((left, right) => compareHistory(left, right, historySort));
+  }, [downloads, filter, historyQuery, historySort]);
 
   function updateDownload(
     id: string,
@@ -613,6 +680,7 @@ function App() {
       queuedAtMs,
       scheduledForMs,
       queueSequence,
+      completedAtMs: null,
     };
     setDownloads((current) =>
       existingId
@@ -627,7 +695,7 @@ function App() {
       totalBytes: storedItem.totalBytes?.toString() ?? null,
     };
     const currentSnapshot = latestSnapshot.current ?? {
-      schemaVersion: 3,
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
       settings: executionSettings,
       downloads: downloads.map(({ recoverable: _recoverable, ...download }) => ({
         ...download,
@@ -636,7 +704,7 @@ function App() {
       })),
     };
     const snapshot: AppSnapshot = {
-      schemaVersion: 3,
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
       settings: executionSettings,
       downloads: currentSnapshot.downloads.some((download) => download.id === item.id)
         ? currentSnapshot.downloads.map((download) =>
@@ -767,6 +835,7 @@ function App() {
         totalBytes: BigInt(summary.bytesWritten),
         sha256: summary.sha256,
         resumed: summary.resumed,
+        completedAtMs: Date.now().toString(),
       });
       if (executionSettings.notifications) {
         void notifyCompleted(destinationName(destination));
@@ -879,6 +948,13 @@ function App() {
     setDownloads((current) => current.filter((item) => item.id !== id));
   }
 
+  function clearCompletedHistory() {
+    if (counts.completed === 0) return;
+    if (!window.confirm(t("clearCompletedConfirm"))) return;
+    setDownloads((current) => current.filter((item) => item.status !== "completed"));
+    setHistoryQuery("");
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -953,6 +1029,27 @@ function App() {
             <input type="checkbox" checked={settings.notifications} onChange={(event) => setSettings((current) => ({ ...current, notifications: event.target.checked }))} />
             {t("notifications")}
           </label>
+          <label>
+            {t("historyRetention")}
+            <select
+              value={settings.historyRetentionDays ?? "forever"}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSettings((current) => ({
+                  ...current,
+                  historyRetentionDays: value === "forever"
+                    ? null
+                    : Number(value) as 7 | 30 | 90,
+                }));
+              }}
+            >
+              <option value="forever">{t("keepForever")}</option>
+              <option value="7">{t("keepSevenDays")}</option>
+              <option value="30">{t("keepThirtyDays")}</option>
+              <option value="90">{t("keepNinetyDays")}</option>
+            </select>
+          </label>
+          <small className="queue-help">{t("historyRetentionHint")}</small>
           <fieldset className="proxy-settings">
             <legend>Proxy</legend>
             <label>
@@ -1168,15 +1265,58 @@ function App() {
 
         <section className="downloads-panel" aria-live="polite">
           <div className="panel-heading">
-            <h2>{filter === "all" ? "All downloads" : FILTER_LABELS[filter]}</h2>
-            <span>{visibleDownloads.length} {visibleDownloads.length === 1 ? "item" : "items"}</span>
+            <h2>{filter === "all"
+              ? "All downloads"
+              : filter === "completed" ? t("downloadHistory") : FILTER_LABELS[filter]}</h2>
+            <span>
+              {filter === "completed" && historyQuery.trim()
+                ? `${visibleDownloads.length} ${t("of")} ${counts.completed}`
+                : visibleDownloads.length}{" "}
+              {visibleDownloads.length === 1 ? t("item") : t("items")}
+            </span>
           </div>
+          {filter === "completed" && (
+            <div className="history-toolbar" role="search">
+              <label>
+                <span className="sr-only">{t("searchHistory")}</span>
+                <input
+                  type="search"
+                  value={historyQuery}
+                  placeholder={t("searchHistory")}
+                  onChange={(event) => setHistoryQuery(event.target.value)}
+                />
+              </label>
+              <label>
+                <span className="sr-only">{t("sortHistory")}</span>
+                <select
+                  aria-label={t("sortHistory")}
+                  value={historySort}
+                  onChange={(event) => setHistorySort(event.target.value as HistorySort)}
+                >
+                  <option value="newest">{t("newestFirst")}</option>
+                  <option value="oldest">{t("oldestFirst")}</option>
+                  <option value="name">{t("nameSort")}</option>
+                  <option value="size">{t("sizeSort")}</option>
+                </select>
+              </label>
+              <button
+                className="clear-history"
+                type="button"
+                disabled={counts.completed === 0}
+                onClick={clearCompletedHistory}
+              >
+                {t("clearCompleted")}
+              </button>
+            </div>
+          )}
           {visibleDownloads.length === 0 ? (
             <div className="empty-state">
               <div className="target-icon" aria-hidden="true"><span>DL</span></div>
-              <h3>{downloads.length === 0 ? t("empty") : "Nothing in this view"}</h3>
+              <h3>{filter === "completed" ? t("noHistory") : downloads.length === 0 ? t("empty") : "Nothing in this view"}</h3>
               <p>
-                {downloads.length === 0
+                {filter === "completed"
+                  ? historyQuery.trim() ? t("noHistoryMatch") : t("noHistoryHint")
+                  : downloads.length === 0
                   ? t("emptyHint")
                   : "Choose another filter to see your downloads."}
               </p>
@@ -1190,6 +1330,12 @@ function App() {
                   onControl={(action) => void controlDownload(item, action)}
                   onRemove={() => removeDownload(item.id)}
                   onRetry={() => retryDownload(item)}
+                  completedLabel={item.status === "completed"
+                    ? item.completedAtMs === null
+                      ? t("completionDateUnavailable")
+                      : `${t("completedOn")} ${formatHistoryTime(item.completedAtMs, settings.language)}`
+                    : null}
+                  removeLabel={item.status === "completed" ? t("removeFromHistory") : t("remove")}
                 />
               ))}
             </div>
@@ -1220,7 +1366,7 @@ function FilterButton({ active, count, label, onClick }: { active: boolean; coun
   );
 }
 
-function DownloadRow({ item, onControl, onRemove, onRetry }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void }) {
+function DownloadRow({ item, onControl, onRemove, onRetry, completedLabel, removeLabel }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void; completedLabel: string | null; removeLabel: string }) {
   const percentage = item.totalBytes !== null && item.totalBytes > 0n
     ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
@@ -1245,7 +1391,7 @@ function DownloadRow({ item, onControl, onRemove, onRetry }: { item: DownloadIte
         <progress max={100} value={percentage ?? undefined} aria-label={`Download progress for ${item.name}`} />
         <div className="download-meta">
           <span>{formatBytes(item.downloadedBytes)}{item.totalBytes !== null ? ` of ${formatBytes(item.totalBytes)}` : ""}</span>
-          <span>{percentage === null ? "Size unknown" : `${percentage.toFixed(0)}%`}</span>
+          <span>{completedLabel ?? (percentage === null ? "Size unknown" : `${percentage.toFixed(0)}%`)}</span>
         </div>
         {item.status === "scheduled" && item.scheduledForMs && (
           <p className="queue-note">Starts {formatScheduledTime(item.scheduledForMs)}</p>
@@ -1261,7 +1407,7 @@ function DownloadRow({ item, onControl, onRemove, onRetry }: { item: DownloadIte
         {item.status === "paused" && <button type="button" onClick={() => item.recoverable ? onRetry() : onControl("resume")}>Resume</button>}
         {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}
         {(item.status === "failed" || item.status === "cancelled") && <button type="button" onClick={onRetry}>Retry</button>}
-        {!isActive && <button type="button" onClick={onRemove}>Remove</button>}
+        {!isActive && <button type="button" onClick={onRemove}>{removeLabel}</button>}
       </div>
     </article>
   );

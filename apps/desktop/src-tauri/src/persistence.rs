@@ -11,7 +11,7 @@ use tokio::{
 };
 use url::Url;
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const MAX_DOWNLOADS: usize = 10_000;
 const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -43,6 +43,7 @@ pub(crate) struct AppSettings {
     pub per_download_speed_limit_bps: Option<u64>,
     pub global_speed_limit_bps: Option<u64>,
     pub queue_mode: String,
+    pub history_retention_days: Option<u32>,
     pub proxy_mode: String,
     pub proxy_url: String,
     pub proxy_username: String,
@@ -63,6 +64,7 @@ impl Default for AppSettings {
             per_download_speed_limit_bps: None,
             global_speed_limit_bps: None,
             queue_mode: "parallel".into(),
+            history_retention_days: None,
             proxy_mode: "disabled".into(),
             proxy_url: String::new(),
             proxy_username: String::new(),
@@ -95,6 +97,12 @@ impl AppSettings {
         }
         if !matches!(self.queue_mode.as_str(), "parallel" | "sequential") {
             return Err("Unsupported queue mode".into());
+        }
+        if self
+            .history_retention_days
+            .is_some_and(|days| !matches!(days, 7 | 30 | 90))
+        {
+            return Err("History retention must be forever, 7, 30, or 90 days".into());
         }
         if !matches!(self.proxy_mode.as_str(), "disabled" | "system" | "custom") {
             return Err("Unsupported proxy mode".into());
@@ -160,6 +168,8 @@ pub(crate) struct StoredDownload {
     pub scheduled_for_ms: Option<String>,
     #[serde(default)]
     pub queue_sequence: Option<String>,
+    #[serde(default)]
+    pub completed_at_ms: Option<String>,
 }
 
 impl StoredDownload {
@@ -209,6 +219,11 @@ impl StoredDownload {
             .as_deref()
             .map(super::parse_queue_sequence)
             .transpose()?;
+        let completed_at = self
+            .completed_at_ms
+            .as_deref()
+            .map(super::parse_queue_timestamp)
+            .transpose()?;
         if matches!(self.status.as_str(), "queued" | "scheduled") && queued_at.is_none() {
             return Err("A queued download is missing its enqueue time".into());
         }
@@ -217,6 +232,9 @@ impl StoredDownload {
         }
         if matches!(self.status.as_str(), "queued" | "scheduled") && queue_sequence.is_none() {
             return Err("A queued download is missing its FIFO sequence".into());
+        }
+        if self.status != "completed" && completed_at.is_some() {
+            return Err("Only a completed download can have a completion time".into());
         }
         let downloaded = self
             .downloaded_bytes
@@ -519,6 +537,7 @@ mod tests {
         assert_eq!(snapshot.settings.theme, "system");
         assert_eq!(snapshot.settings.proxy_mode, "disabled");
         assert_eq!(snapshot.settings.queue_mode, "parallel");
+        assert_eq!(snapshot.settings.history_retention_days, None);
         assert_eq!(snapshot.downloads.len(), 0);
     }
 
@@ -578,6 +597,7 @@ mod tests {
             queued_at_ms: None,
             scheduled_for_ms: None,
             queue_sequence: None,
+            completed_at_ms: None,
         };
 
         download.validate().expect("multibyte name should be valid");
@@ -607,14 +627,97 @@ mod tests {
                 queued_at_ms: Some("1770000000000".into()),
                 scheduled_for_ms: None,
                 queue_sequence: None,
+                completed_at_ms: None,
             }],
         };
 
         snapshot
             .validate()
             .expect("version two queue should migrate");
-        assert_eq!(snapshot.schema_version, 3);
+        assert_eq!(snapshot.schema_version, 4);
         assert_eq!(snapshot.downloads[0].queue_sequence.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn version_three_completed_items_migrate_without_inventing_a_completion_time() {
+        let destination = if cfg!(windows) {
+            "C:/Downloads/file.bin"
+        } else {
+            "/tmp/file.bin"
+        };
+        let mut snapshot: AppSnapshot = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 3,
+            "settings": {},
+            "downloads": [{
+                "id": "80cf859d-fac7-4ec2-a5e2-63a3242c9776",
+                "name": "file.bin",
+                "url": "https://example.test/file.bin",
+                "destination": destination,
+                "status": "completed",
+                "downloadedBytes": "1024",
+                "totalBytes": "1024",
+                "sha256": "a".repeat(64),
+                "queuedAtMs": "1770000000000",
+                "scheduledForMs": null,
+                "queueSequence": "0"
+            }]
+        }))
+        .expect("version three history should deserialize");
+
+        snapshot
+            .validate()
+            .expect("version three history should migrate");
+        assert_eq!(snapshot.schema_version, 4);
+        assert_eq!(snapshot.downloads[0].completed_at_ms, None);
+    }
+
+    #[test]
+    fn validates_history_retention_and_completion_times() {
+        for days in [None, Some(7), Some(30), Some(90)] {
+            let settings = AppSettings {
+                history_retention_days: days,
+                ..AppSettings::default()
+            };
+            settings.validate().expect("supported retention is valid");
+        }
+        let invalid_settings = AppSettings {
+            history_retention_days: Some(1),
+            ..AppSettings::default()
+        };
+        assert!(invalid_settings.validate().is_err());
+
+        let destination = if cfg!(windows) {
+            "C:/Downloads/file.bin"
+        } else {
+            "/tmp/file.bin"
+        };
+        let completed = StoredDownload {
+            id: "80cf859d-fac7-4ec2-a5e2-63a3242c9776".into(),
+            name: "file.bin".into(),
+            url: "https://example.test/file.bin".into(),
+            destination: destination.into(),
+            status: "completed".into(),
+            downloaded_bytes: "1024".into(),
+            total_bytes: Some("1024".into()),
+            sha256: Some("a".repeat(64)),
+            resumed: Some(false),
+            error: None,
+            queued_at_ms: Some("1770000000000".into()),
+            scheduled_for_ms: None,
+            queue_sequence: Some("0".into()),
+            completed_at_ms: Some("1770003600000".into()),
+        };
+        completed
+            .validate()
+            .expect("completion time should be valid");
+
+        let mut invalid_time = completed.clone();
+        invalid_time.completed_at_ms = Some("not-a-time".into());
+        assert!(invalid_time.validate().is_err());
+
+        let mut unfinished = completed;
+        unfinished.status = "failed".into();
+        assert!(unfinished.validate().is_err());
     }
 
     #[test]
@@ -638,6 +741,7 @@ mod tests {
             queued_at_ms: Some("1770000000000".into()),
             scheduled_for_ms: Some("1770003600000".into()),
             queue_sequence: Some("42".into()),
+            completed_at_ms: None,
         };
 
         scheduled
@@ -652,7 +756,7 @@ mod tests {
         let mut duplicate = scheduled.clone();
         duplicate.id = "duplicate-sequence".into();
         let mut snapshot = AppSnapshot {
-            schema_version: 3,
+            schema_version: 4,
             settings: AppSettings::default(),
             downloads: vec![scheduled.clone(), duplicate],
         };

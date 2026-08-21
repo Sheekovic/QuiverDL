@@ -26,6 +26,17 @@
 }
 
 * { box-sizing: border-box; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 body { margin: 0; min-width: 780px; min-height: 100vh; overflow: hidden; }
 button, input, select { font: inherit; }
 button { color: inherit; }
@@ -302,6 +313,30 @@ input:focus { border-color: var(--accent); }
 }
 .panel-heading h2 { margin: 0; font-size: 14px; }
 .panel-heading span { color: var(--subtle); font-size: 11px; }
+.history-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(135px, auto) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--panel-solid) 58%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.history-toolbar label { margin: 0; }
+.history-toolbar input, .history-toolbar select, .history-toolbar button {
+  min-height: 36px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--input);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+.history-toolbar select { width: 100%; }
+.history-toolbar button { cursor: pointer; }
+.history-toolbar button:hover { border-color: var(--accent); }
+.history-toolbar .clear-history { color: var(--danger); background: transparent; }
+.history-toolbar .clear-history:hover { border-color: var(--danger); }
+.history-toolbar button:disabled { opacity: 0.45; cursor: default; }
 .empty-state {
   min-height: 225px;
   display: grid;
@@ -501,4 +536,6 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 20px; }
   .save-button { min-height: 44px; }
   .download-row { grid-template-columns: auto minmax(0, 1fr); }
   .row-actions { grid-column: 2; justify-self: start; }
+  .history-toolbar { grid-template-columns: 1fr 1fr; }
+  .history-toolbar > label:first-child { grid-column: 1 / -1; }
 }
