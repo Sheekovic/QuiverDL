@@ -1,208 +1,347 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta
       name="description"
-      content="QuiverDL is a fast, privacy-respecting open-source download manager built with Rust and Tauri."
+      content="QuiverDL is a fast, private, open-source download manager for Windows, macOS, and Linux. Available now from the Microsoft Store."
     >
-    <meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#070a12" media="(prefers-color-scheme: dark)">
     <meta name="theme-color" content="#f7f8fc" media="(prefers-color-scheme: light)">
-    <meta property="og:title" content="QuiverDL — Your downloads, right on target">
+    <meta property="og:title" content="QuiverDL — Downloads, right on target">
     <meta
       property="og:description"
-      content="A fast, reliable, privacy-respecting open-source download manager."
+      content="A fast, reliable, privacy-respecting open-source download manager. Available from the Microsoft Store."
     >
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://sheekovic.github.io/QuiverDL/">
+    <meta property="og:site_name" content="QuiverDL">
+    <meta name="twitter:card" content="summary">
+    <link rel="canonical" href="https://sheekovic.github.io/QuiverDL/">
     <title>QuiverDL — Fast, private, open-source downloads</title>
     <link rel="stylesheet" href="./styles.css">
+    <script src="./site.js" defer></script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "QuiverDL",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Windows",
+        "description": "A fast, privacy-respecting open-source download manager built with Rust and Tauri.",
+        "downloadUrl": "https://apps.microsoft.com/detail/9MVB2DD54NF4",
+        "softwareHelp": "https://github.com/Sheekovic/QuiverDL/blob/main/SUPPORT.md",
+        "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <header class="site-header">
+    <header class="site-header" data-header>
       <div class="shell nav-shell">
         <a class="brand" href="./" aria-label="QuiverDL home">
           <span class="brand-mark" aria-hidden="true"><span></span></span>
           <span>QuiverDL</span>
         </a>
-        <nav aria-label="Main navigation">
+
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-nav-toggle>
+          <span class="sr-only">Open navigation</span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+
+        <nav id="site-nav" aria-label="Main navigation" data-nav>
+          <a href="#downloads">Downloads</a>
           <a href="#features">Features</a>
           <a href="#community">Community</a>
-          <a href="https://github.com/Sheekovic/QuiverDL">GitHub</a>
           <a href="./privacy/">Privacy</a>
+          <a class="nav-github" href="https://github.com/Sheekovic/QuiverDL">
+            GitHub <span aria-hidden="true">↗</span>
+          </a>
         </nav>
+
+        <button class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false" data-theme-toggle>
+          <span class="theme-icon theme-sun" aria-hidden="true"></span>
+          <span class="theme-icon theme-moon" aria-hidden="true"></span>
+        </button>
       </div>
     </header>
 
     <main id="main">
       <section class="hero shell">
-        <div class="hero-copy">
-          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Open source · Pre-release</p>
-          <h1>Your downloads,<br><span>right on target.</span></h1>
+        <div class="hero-copy" data-reveal>
+          <a class="availability-pill" href="https://apps.microsoft.com/detail/9MVB2DD54NF4">
+            <span class="live-dot" aria-hidden="true"></span>
+            Available now on Microsoft Store
+            <span aria-hidden="true">→</span>
+          </a>
+          <h1>Downloads,<br><span>right on target.</span></h1>
           <p class="hero-lede">
-            QuiverDL is a performance-first download manager with a native Rust engine,
-            reliable restart recovery, and privacy that does not depend on an account.
+            QuiverDL combines a native Rust engine with reliable resume, clean desktop controls,
+            and privacy that never asks you to create an account.
           </p>
-          <div class="actions">
-            <a class="button primary" href="https://github.com/Sheekovic/QuiverDL">
-              View on GitHub
-              <span aria-hidden="true">↗</span>
+          <div class="hero-actions">
+            <a class="button button-store" href="https://apps.microsoft.com/detail/9MVB2DD54NF4">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 4.5 10.4 3.4v7.2H3V4.5Zm8.4-1.2L21 2v8.6h-9.6V3.3ZM3 11.6h7.4v7.2L3 17.8v-6.2Zm8.4 0H21V20l-9.6-1.3v-7.1Z"></path>
+              </svg>
+              <span><small>Download from</small>Microsoft Store</span>
             </a>
-            <a class="button secondary" href="https://github.com/Sheekovic/QuiverDL/blob/main/CONTRIBUTING.md">
-              Start contributing
-            </a>
+            <a class="button button-secondary" href="#downloads">All platforms <span aria-hidden="true">↓</span></a>
           </div>
-          <p class="release-note">
-            The first signed build is in preparation. Follow the repository to know when it lands.
-          </p>
+          <div class="hero-trust" aria-label="Download benefits">
+            <span><b aria-hidden="true">✓</b> Microsoft-signed</span>
+            <span><b aria-hidden="true">✓</b> Free and open source</span>
+            <span><b aria-hidden="true">✓</b> No tracking</span>
+          </div>
         </div>
 
-        <div class="download-card" role="img" aria-label="Illustration of a QuiverDL download">
-          <div class="window-bar">
-            <span></span><span></span><span></span>
-            <p>QuiverDL</p>
-          </div>
-          <div class="download-body">
-            <div class="file-icon" aria-hidden="true">↓</div>
-            <div class="file-copy">
-              <strong>open-source-release.iso</strong>
-              <span>3.4 GB of 4.0 GB</span>
+        <div class="product-stage" data-reveal>
+          <div class="stage-glow" aria-hidden="true"></div>
+          <div class="app-window" data-demo>
+            <div class="app-titlebar">
+              <div class="app-brand"><span class="mini-mark" aria-hidden="true"></span>QuiverDL</div>
+              <div class="window-actions" aria-hidden="true"><span></span><span></span><span></span></div>
             </div>
-            <strong class="percent">85%</strong>
+            <div class="app-layout">
+              <aside class="app-sidebar" aria-hidden="true">
+                <span class="active"></span><span></span><span></span><span></span>
+                <i></i>
+                <span></span>
+              </aside>
+              <div class="app-content">
+                <div class="app-toolbar">
+                  <div><strong>Downloads</strong><small>3 active transfers</small></div>
+                  <button type="button" data-demo-toggle><span aria-hidden="true">Ⅱ</span> Pause</button>
+                </div>
+                <article class="transfer transfer-active">
+                  <div class="file-badge file-blue" aria-hidden="true">↓</div>
+                  <div class="transfer-copy">
+                    <div class="transfer-title"><strong>quiverdl-release.iso</strong><b data-progress-label>78%</b></div>
+                    <div class="progress-track"><span data-progress-bar></span></div>
+                    <div class="transfer-meta"><span>3.12 GB of 4.00 GB</span><span data-speed>42.8 MB/s</span><span>8 connections</span></div>
+                  </div>
+                </article>
+                <article class="transfer">
+                  <div class="file-badge file-purple" aria-hidden="true">✓</div>
+                  <div class="transfer-copy">
+                    <div class="transfer-title"><strong>design-assets.zip</strong><b>Complete</b></div>
+                    <div class="progress-track complete"><span></span></div>
+                    <div class="transfer-meta"><span>286 MB</span><span>SHA-256 verified</span></div>
+                  </div>
+                </article>
+                <article class="transfer transfer-muted">
+                  <div class="file-badge file-green" aria-hidden="true">↻</div>
+                  <div class="transfer-copy">
+                    <div class="transfer-title"><strong>documentation.tar.gz</strong><b>Queued</b></div>
+                    <div class="transfer-meta"><span>Starts automatically</span><span>Sequential queue</span></div>
+                  </div>
+                </article>
+              </div>
+            </div>
           </div>
-          <div class="progress" aria-hidden="true"><span></span></div>
-          <div class="metrics">
-            <div><span>Speed</span><strong>42.8 MB/s</strong></div>
-            <div><span>Connections</span><strong>8 segments</strong></div>
-            <div><span>Privacy</span><strong>Local only</strong></div>
-          </div>
-          <div class="pulse pulse-one" aria-hidden="true"></div>
-          <div class="pulse pulse-two" aria-hidden="true"></div>
+          <div class="floating-stat stat-speed"><span>Peak speed</span><strong>68.4 MB/s</strong></div>
+          <div class="floating-stat stat-private"><span class="shield" aria-hidden="true">✓</span><strong>Private by default</strong></div>
         </div>
       </section>
 
-      <section class="principles" aria-label="Project principles">
-        <div class="shell principle-grid">
+      <section class="trust-strip" aria-label="Project highlights">
+        <div class="shell trust-grid">
           <p><strong>Rust-powered</strong><span>Native transfer engine</span></p>
-          <p><strong>Cross-platform</strong><span>Windows, Linux, macOS</span></p>
+          <p><strong>Cross-platform</strong><span>Windows, macOS, Linux</span></p>
           <p><strong>Privacy-first</strong><span>No accounts or telemetry</span></p>
           <p><strong>GPL-3.0+</strong><span>Free software, always</span></p>
         </div>
       </section>
 
-      <section class="section shell" id="features">
-        <div class="section-heading">
-          <p class="eyebrow">Built for the transfers that matter</p>
-          <h2>Fast is useful.<br>Reliable is essential.</h2>
-          <p>
-            QuiverDL treats every server response and filename as untrusted, then keeps your
-            progress recoverable when the network—or your computer—does not cooperate.
+      <section class="download-section" id="downloads">
+        <div class="shell">
+          <div class="section-heading centered" data-reveal>
+            <p class="eyebrow">Choose your platform</p>
+            <h2>Get QuiverDL.</h2>
+            <p>Windows is available now through Microsoft Store. Direct downloads and other platforms are on the way.</p>
+          </div>
+
+          <p class="platform-note" data-platform-note hidden>
+            <span aria-hidden="true">✦</span>
+            <span data-platform-message></span>
+          </p>
+
+          <div class="platform-grid">
+            <article class="platform-card platform-windows" data-platform="windows" data-reveal>
+              <div class="platform-topline">
+                <div class="platform-icon windows-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                <span class="status-badge available">Available now</span>
+              </div>
+              <h3>Windows</h3>
+              <p>The recommended Windows release, signed and delivered through Microsoft Store.</p>
+              <a class="platform-primary" href="https://apps.microsoft.com/detail/9MVB2DD54NF4">
+                Get from Microsoft Store <span aria-hidden="true">→</span>
+              </a>
+              <ul class="download-options" aria-label="Additional Windows downloads">
+                <li><span>Installer <small>.exe / .msi</small></span><b>Soon</b></li>
+                <li><span>Portable <small>.zip</small></span><b>Soon</b></li>
+              </ul>
+              <p class="platform-footnote">Store-managed updates · x64</p>
+            </article>
+
+            <article class="platform-card" data-platform="macos" data-reveal>
+              <div class="platform-topline">
+                <div class="platform-icon apple-icon" aria-hidden="true">●</div>
+                <span class="status-badge soon">Coming soon</span>
+              </div>
+              <h3>macOS</h3>
+              <p>Native builds for modern Apple Silicon and Intel-based Macs are being prepared.</p>
+              <span class="platform-primary disabled" aria-disabled="true">macOS download coming soon</span>
+              <ul class="download-options" aria-label="Planned macOS downloads">
+                <li><span>Apple Silicon <small>.dmg</small></span><b>Soon</b></li>
+                <li><span>Intel <small>.dmg</small></span><b>Soon</b></li>
+              </ul>
+              <p class="platform-footnote">Signed and notarized release planned</p>
+            </article>
+
+            <article class="platform-card" data-platform="linux" data-reveal>
+              <div class="platform-topline">
+                <div class="platform-icon linux-icon" aria-hidden="true">⌁</div>
+                <span class="status-badge soon">Coming soon</span>
+              </div>
+              <h3>Linux</h3>
+              <p>Portable and distribution-friendly packages are planned for the first Linux release.</p>
+              <span class="platform-primary disabled" aria-disabled="true">Linux download coming soon</span>
+              <ul class="download-options" aria-label="Planned Linux downloads">
+                <li><span>AppImage <small>portable</small></span><b>Soon</b></li>
+                <li><span>Debian / RPM <small>packages</small></span><b>Soon</b></li>
+              </ul>
+              <p class="platform-footnote">x64 packages planned</p>
+            </article>
+          </div>
+
+          <p class="source-download" data-reveal>
+            Prefer to build it yourself?
+            <a href="https://github.com/Sheekovic/QuiverDL">Source code and build instructions <span aria-hidden="true">↗</span></a>
           </p>
         </div>
+      </section>
 
-        <div class="feature-grid">
-          <article class="feature featured">
-            <div class="feature-symbol" aria-hidden="true">↯</div>
-            <h3>Adaptive parallel transfers</h3>
-            <p>
-              Bounded segments, per-host connection limits, adaptive sizing, and merge
-              verification work together for speed without sacrificing correctness.
-            </p>
+      <section class="section shell" id="features">
+        <div class="section-heading" data-reveal>
+          <p class="eyebrow">Performance without compromise</p>
+          <h2>Fast when it can be.<br>Careful when it matters.</h2>
+          <p>Every transfer is designed around recoverability, transparent behavior, and untrusted network input.</p>
+        </div>
+
+        <div class="bento-grid">
+          <article class="feature-card feature-wide accent-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">↗</div>
+            <div>
+              <p class="feature-kicker">Adaptive engine</p>
+              <h3>Parallel downloads that adjust to the server.</h3>
+              <p>Bounded segments, per-host limits, adaptive sizing, and exact merge verification deliver speed without gambling with correctness.</p>
+            </div>
+            <div class="segment-visual" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
           </article>
-          <article class="feature">
-            <div class="feature-symbol" aria-hidden="true">↻</div>
-            <h3>Safe restart recovery</h3>
-            <p>
-              Resume decisions are validated against the remote file. Changed or malformed
-              responses never get silently appended to your partial download.
-            </p>
+
+          <article class="feature-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">↻</div>
+            <p class="feature-kicker">Recovery</p>
+            <h3>Resume safely after interruptions.</h3>
+            <p>Remote validators protect partial files from changed or malformed responses.</p>
           </article>
-          <article class="feature">
-            <div class="feature-symbol" aria-hidden="true">◇</div>
-            <h3>Private by design</h3>
-            <p>
-              No account, advertising, analytics, or telemetry. Your queue, settings, URLs, and
-              download history remain on your device.
-            </p>
+
+          <article class="feature-card dark-card" data-reveal>
+            <div class="privacy-orbit" aria-hidden="true"><span>✓</span></div>
+            <p class="feature-kicker">Private by design</p>
+            <h3>Your queue stays on your device.</h3>
+            <p>No accounts, advertising, analytics, telemetry, or cloud download history.</p>
           </article>
-          <article class="feature">
-            <div class="feature-symbol" aria-hidden="true">⌁</div>
-            <h3>Browser companions</h3>
-            <p>
-              Optional Chromium and Firefox integrations use authenticated native messaging and
-              privacy-preserving interception rules that are disabled by default.
-            </p>
+
+          <article class="feature-card" data-reveal>
+            <div class="feature-icon" aria-hidden="true">◇</div>
+            <p class="feature-kicker">Integrity</p>
+            <h3>Never silently overwrite a file.</h3>
+            <p>Atomic destination handling, collision protection, exact ranges, and optional SHA-256 verification.</p>
           </article>
-          <article class="feature">
-            <div class="feature-symbol" aria-hidden="true">◐</div>
-            <h3>Desktop-native experience</h3>
-            <p>
-              Adaptive light and dark themes, keyboard-first controls, system tray behavior,
-              notifications, and English/Arabic direction support.
-            </p>
+
+          <article class="feature-card feature-wide" data-reveal>
+            <div class="feature-icon" aria-hidden="true">⌁</div>
+            <div>
+              <p class="feature-kicker">Desktop experience</p>
+              <h3>Made to feel native everywhere.</h3>
+              <p>Adaptive light and dark themes, keyboard-first controls, tray behavior, notifications, durable queues, scheduling, proxies, and English/Arabic direction support.</p>
+            </div>
+            <div class="theme-preview" aria-hidden="true"><span></span><span></span></div>
           </article>
-          <article class="feature">
-            <div class="feature-symbol" aria-hidden="true">✓</div>
-            <h3>Integrity checks</h3>
-            <p>
-              Atomic destination handling, collision protection, exact range validation, and
-              optional SHA-256 verification keep completed files trustworthy.
-            </p>
-          </article>
+        </div>
+      </section>
+
+      <section class="workflow-section">
+        <div class="shell workflow-grid">
+          <div class="section-heading" data-reveal>
+            <p class="eyebrow">Simple by default</p>
+            <h2>From link to file in three clean steps.</h2>
+            <p>Fine-grained controls are there when you need them, but they never stand between you and a straightforward download.</p>
+          </div>
+          <ol class="workflow-list">
+            <li data-reveal><span>01</span><div><strong>Add a link</strong><p>Paste a URL or send it from an optional browser companion.</p></div></li>
+            <li data-reveal><span>02</span><div><strong>Choose how it runs</strong><p>Use sensible defaults or adjust connections, scheduling, queues, and speed limits.</p></div></li>
+            <li data-reveal><span>03</span><div><strong>Resume with confidence</strong><p>QuiverDL preserves recoverable progress and validates the remote file before continuing.</p></div></li>
+          </ol>
         </div>
       </section>
 
       <section class="community-section" id="community">
         <div class="shell community-grid">
-          <div>
-            <p class="eyebrow">Made in public</p>
-            <h2>Help aim the next release.</h2>
-            <p>
-              Code is only one way to contribute. Documentation, accessibility, translations,
-              deterministic tests, design feedback, and careful bug reports all make QuiverDL
-              better.
-            </p>
+          <div data-reveal>
+            <p class="eyebrow">Open source, built in public</p>
+            <h2>Help shape where the arrow lands next.</h2>
+            <p>Code, documentation, translations, accessibility reviews, design feedback, and careful bug reports all move QuiverDL forward.</p>
+            <div class="community-actions">
+              <a class="button button-light" href="https://github.com/Sheekovic/QuiverDL">Explore on GitHub <span aria-hidden="true">↗</span></a>
+              <a class="text-link" href="https://github.com/Sheekovic/QuiverDL/blob/main/CONTRIBUTING.md">Contribution guide →</a>
+            </div>
           </div>
-          <div class="community-links">
+          <div class="community-links" data-reveal>
             <a href="https://github.com/Sheekovic/QuiverDL/labels/good%20first%20issue">
-              <span><strong>Good first issues</strong><small>Pick up a focused, guided task</small></span>
-              <b aria-hidden="true">→</b>
+              <span><strong>Good first issues</strong><small>Start with a focused, guided task</small></span><b aria-hidden="true">→</b>
             </a>
             <a href="https://github.com/Sheekovic/QuiverDL/discussions">
-              <span><strong>Join the discussion</strong><small>Share ideas and ask questions</small></span>
-              <b aria-hidden="true">→</b>
+              <span><strong>GitHub Discussions</strong><small>Share an idea or ask a question</small></span><b aria-hidden="true">→</b>
             </a>
             <a href="https://github.com/Sheekovic/QuiverDL/blob/main/ROADMAP.md">
-              <span><strong>Read the roadmap</strong><small>See what is complete and what comes next</small></span>
-              <b aria-hidden="true">→</b>
+              <span><strong>Public roadmap</strong><small>Follow completed and upcoming work</small></span><b aria-hidden="true">→</b>
             </a>
           </div>
         </div>
       </section>
 
-      <section class="closing shell">
-        <div class="target" aria-hidden="true"><span></span></div>
-        <p class="eyebrow">Transparent from source to release</p>
-        <h2>A download manager you can inspect,<br>improve, and trust.</h2>
-        <a class="button primary" href="https://github.com/Sheekovic/QuiverDL">
-          Explore the source <span aria-hidden="true">↗</span>
-        </a>
+      <section class="final-cta shell" data-reveal>
+        <div class="target-mark" aria-hidden="true"><span></span></div>
+        <p class="eyebrow">Available now for Windows</p>
+        <h2>A download manager you can inspect, improve, and trust.</h2>
+        <div class="hero-actions centered-actions">
+          <a class="button button-store" href="https://apps.microsoft.com/detail/9MVB2DD54NF4">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4.5 10.4 3.4v7.2H3V4.5Zm8.4-1.2L21 2v8.6h-9.6V3.3ZM3 11.6h7.4v7.2L3 17.8v-6.2Zm8.4 0H21V20l-9.6-1.3v-7.1Z"></path></svg>
+            <span><small>Download from</small>Microsoft Store</span>
+          </a>
+        </div>
       </section>
     </main>
 
     <footer>
       <div class="shell footer-grid">
         <div>
-          <a class="brand" href="./">
-            <span class="brand-mark" aria-hidden="true"><span></span></span>
-            <span>QuiverDL</span>
-          </a>
+          <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"><span></span></span><span>QuiverDL</span></a>
           <p>Your downloads, right on target.</p>
         </div>
         <div class="footer-links">
+          <a href="#downloads">Downloads</a>
           <a href="https://github.com/Sheekovic/QuiverDL">Source</a>
           <a href="https://github.com/Sheekovic/QuiverDL/blob/main/SECURITY.md">Security</a>
           <a href="https://github.com/Sheekovic/QuiverDL/blob/main/SUPPORT.md">Support</a>
@@ -213,3 +352,4 @@
     </footer>
   </body>
 </html>
+
