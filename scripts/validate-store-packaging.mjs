@@ -34,6 +34,14 @@ function tomlStringArray(section, key) {
   return values;
 }
 
+function yamlString(document, key) {
+  const match = document.match(
+    new RegExp(`^\\s*${key}:\\s*(?:"([^"]*)"|'([^']*)'|([^\\s#]+))\\s*(?:#.*)?$`, "m"),
+  );
+  assert.ok(match, `Missing YAML string key: ${key}`);
+  return match[1] ?? match[2] ?? match[3];
+}
+
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
 const releaseConfig = await readJson("release-please-config.json");
@@ -126,11 +134,7 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
-assert.match(
-  snapcraft,
-  new RegExp(`^version: ['"]${desktop.version.replaceAll(".", "\\.")}['"]$`, "m"),
-  "Snap and desktop versions must match",
-);
+assert.equal(yamlString(snapcraft, "version"), desktop.version, "Snap and desktop versions must match");
 assert.match(snapcraft, /^confinement: strict$/m);
 assert.match(snapcraft, /^\s+- home$/m);
 assert.match(snapcraft, /^\s+- network$/m);
