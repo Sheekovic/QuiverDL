@@ -3084,7 +3084,7 @@ dependencies = [
 
 [[package]]
 name = "quiver-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "hex",
@@ -3105,7 +3105,7 @@ dependencies = [
 
 [[package]]
 name = "quiver-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "hex",
@@ -3131,7 +3131,7 @@ dependencies = [
 
 [[package]]
 name = "quiver-native-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs",
  "serde",
