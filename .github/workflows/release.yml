@@ -168,8 +168,16 @@ jobs:
 
   publish-linux:
     name: Publish Linux release
-    needs: linux
-    if: github.event_name == 'push'
+    needs:
+      - linux
+      - signed-desktop
+      - browser-extensions
+    if: >-
+      always() &&
+      github.event_name == 'push' &&
+      needs.linux.result == 'success' &&
+      needs.browser-extensions.result == 'success' &&
+      (needs.signed-desktop.result == 'success' || needs.signed-desktop.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Publish the validated Linux release
