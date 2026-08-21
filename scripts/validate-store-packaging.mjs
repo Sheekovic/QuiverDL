@@ -6,6 +6,31 @@ import { fileURLToPath } from "node:url";
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const readJson = async (...parts) => JSON.parse(await readFile(path.join(repository, ...parts), "utf8"));
 
+function tomlSection(document, name) {
+  const lines = document.replaceAll("\r\n", "\n").split("\n");
+  const start = lines.findIndex((line) => line.trim() === `[${name}]`);
+  assert.notEqual(start, -1, `Missing [${name}] TOML section`);
+  const next = lines.findIndex((line, index) => index > start && /^\s*\[/.test(line));
+  return lines.slice(start + 1, next === -1 ? undefined : next).join("\n");
+}
+
+function tomlString(section, key) {
+  const match = section.match(new RegExp(`^\\s*${key}\\s*=\\s*"([^"]+)"\\s*(?:#.*)?$`, "m"));
+  assert.ok(match, `Missing string TOML key: ${key}`);
+  return match[1];
+}
+
+function tomlStringArray(section, key) {
+  const match = section.match(new RegExp(`^\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`, "m"));
+  assert.ok(match, `Missing string-array TOML key: ${key}`);
+  const quoted = /"((?:[^"\\\\]|\\\\.)*)"/g;
+  const values = [...match[1].matchAll(quoted)].map((entry) => JSON.parse(`"${entry[1]}"`));
+  const remainder = match[1].replace(quoted, "").replaceAll(/[,\s]/g, "");
+  assert.equal(remainder, "", `Unsupported value in TOML array: ${key}`);
+  assert.ok(values.length > 0, `TOML array must not be empty: ${key}`);
+  return values;
+}
+
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
 const releaseManifest = await readJson(".release-please-manifest.json");
@@ -19,11 +44,14 @@ const chromium = await readJson("extensions", "chromium", "manifest.json");
 const firefox = await readJson("extensions", "firefox", "manifest.json");
 const firefoxHost = await readJson("extensions", "native-host", "firefox-host.json");
 const cargoWorkspace = await readFile(path.join(repository, "Cargo.toml"), "utf8");
-const cargoMembers = await Promise.all([
-  readFile(path.join(repository, "apps", "desktop", "src-tauri", "Cargo.toml"), "utf8"),
-  readFile(path.join(repository, "crates", "quiver-core", "Cargo.toml"), "utf8"),
-  readFile(path.join(repository, "crates", "quiver-native-host", "Cargo.toml"), "utf8"),
-]);
+const cargoMemberPaths = tomlStringArray(tomlSection(cargoWorkspace, "workspace"), "members");
+assert.equal(new Set(cargoMemberPaths).size, cargoMemberPaths.length, "Cargo members must be unique");
+const cargoMembers = await Promise.all(cargoMemberPaths.map(async (member) => {
+  assert.match(member, /^[A-Za-z0-9._/-]+$/, "Cargo member path contains unsafe characters");
+  const memberDirectory = path.resolve(repository, ...member.split("/"));
+  assert.ok(memberDirectory.startsWith(`${repository}${path.sep}`), "Cargo member escapes the repository");
+  return readFile(path.join(memberDirectory, "Cargo.toml"), "utf8");
+}));
 const snapcraft = await readFile(path.join(repository, "snap", "snapcraft.yaml"), "utf8");
 const msixManifest = await readFile(
   path.join(repository, "packaging", "windows", "msix", "AppxManifest.xml.template"),
@@ -40,15 +68,15 @@ assert.equal(
   desktop.version,
   "Release Please manifest and desktop versions must match",
 );
-assert.match(
-  cargoWorkspace,
-  new RegExp(`\\[workspace\\.package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
+assert.equal(
+  tomlString(tomlSection(cargoWorkspace, "workspace.package"), "version"),
+  desktop.version,
   "Cargo workspace and Tauri versions must match",
 );
 for (const cargoMember of cargoMembers) {
-  assert.match(
-    cargoMember,
-    new RegExp(`\\[package\\][\\s\\S]*?\\nversion = "${desktop.version.replaceAll(".", "\\.")}"`),
+  assert.equal(
+    tomlString(tomlSection(cargoMember, "package"), "version"),
+    desktop.version,
     "Every Cargo package and Tauri version must match",
   );
 }
