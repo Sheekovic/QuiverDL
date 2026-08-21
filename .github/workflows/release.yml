@@ -61,6 +61,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            !target/**/bundle
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Install Linux desktop dependencies
@@ -99,6 +100,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
+            !target/**/bundle
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Install Linux desktop dependencies

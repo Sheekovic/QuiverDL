@@ -94,4 +94,9 @@ assert.match(releaseWorkflow, /environment: release/);
 assert.match(releaseWorkflow, /VITE_QUIVERDL_UPDATER: "true"/);
 assert.match(releaseWorkflow, /--config src-tauri\/tauri\.updater\.conf\.json/);
 assert.match(releaseWorkflow, /--platform linux-x86_64/);
+assert.equal(
+  (releaseWorkflow.match(/!target\/\*\*\/bundle/g) ?? []).length,
+  2,
+  "release caches must exclude stale Tauri bundle outputs",
+);
 process.stdout.write("Updater design is fail-closed and uses the canonical HTTPS endpoint.\n");
