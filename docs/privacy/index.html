@@ -11,6 +11,7 @@
     <meta name="theme-color" content="#f7f8fc" media="(prefers-color-scheme: light)">
     <title>Privacy Policy — QuiverDL</title>
     <link rel="stylesheet" href="../styles.css">
+    <script src="../site.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -21,10 +22,22 @@
           <span class="brand-mark" aria-hidden="true"><span></span></span>
           <span>QuiverDL</span>
         </a>
-        <nav aria-label="Main navigation">
+
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-nav-toggle>
+          <span class="sr-only">Open navigation</span>
+          <span aria-hidden="true"></span>
+          <span aria-hidden="true"></span>
+        </button>
+
+        <nav id="site-nav" aria-label="Main navigation" data-nav>
           <a href="../">Home</a>
           <a href="https://github.com/Sheekovic/QuiverDL">GitHub</a>
         </nav>
+
+        <button class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false" data-theme-toggle>
+          <span class="theme-icon theme-sun" aria-hidden="true"></span>
+          <span class="theme-icon theme-moon" aria-hidden="true"></span>
+        </button>
       </div>
     </header>
 
@@ -119,6 +132,11 @@
               <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a>.
             </p>
             <p>
+              If you use the color-theme control, the site stores only your light or dark theme
+              preference in your browser's local storage. It is never transmitted to the QuiverDL
+              project and can be removed through your browser settings.
+            </p>
+            <p>
               If you open an issue, discussion, pull request, or other contribution on GitHub, the
               content and account information you provide are processed and displayed by GitHub.
               Never include private download URLs, credentials, cookies, or personal files in a
@@ -188,3 +206,4 @@
     </footer>
   </body>
 </html>
+
