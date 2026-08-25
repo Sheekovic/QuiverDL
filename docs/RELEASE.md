@@ -3,7 +3,9 @@
 QuiverDL releases are built from annotated `v*` tags by `.github/workflows/release.yml`. Release
 Please opens a draft version PR after reviewed changes reach `main`; that PR must pass normal review
 and CI. Merging the reviewed version PR updates the release manifest, and `version-tag.yml` creates
-the matching annotated tag exactly once. The workspace-safe release strategy updates every declared
+the matching annotated tag exactly once, verifies an existing tag still targets that merge, and
+removes Release Please's pending label so the next release PR is not blocked. The workspace-safe
+release strategy updates every declared
 version file, then `sync-release-lockfile.mjs` deterministically updates the three local Cargo.lock
 package entries in a follow-up release-branch commit; CI must pass on that final PR head. The
 synchronizer always executes from the immutable triggering `main` commit without push credentials;
