@@ -264,6 +264,8 @@ async fn run_bridge(
             };
             if line.len() > 1024 * 1024 {
                 let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = stderr_task.await;
                 return Err("The media engine returned an oversized response".into());
             }
             let event: Value = serde_json::from_str(&line)
