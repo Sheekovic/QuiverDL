@@ -161,9 +161,14 @@ assert.equal(
 );
 assert.match(releaseWorkflow, /debs=\(target\/release\/bundle\/deb\/\*\.deb\)/);
 assert.match(releaseWorkflow, /rpms=\(target\/release\/bundle\/rpm\/\*\.rpm\)/);
-assert.match(
-  releaseWorkflow,
-  /appimages=\(target\/release\/bundle\/appimage\/\*\.AppImage\)/,
+assert.equal(
+  (
+    releaseWorkflow.match(
+      /appimages=\(target\/release\/bundle\/appimage\/\*\.AppImage\)/g,
+    ) ?? []
+  ).length,
+  2,
+  "the upload and updater manifest must select the same canonical AppImage directory",
 );
 assert.doesNotMatch(
   releaseWorkflow,

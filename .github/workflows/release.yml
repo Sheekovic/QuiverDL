@@ -248,8 +248,10 @@ jobs:
         run: |
           remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
           test "$remote_commit" = "$RELEASE_COMMIT"
-          appimage="$(find . -type f -path '*/release/bundle/appimage/*.AppImage' -print -quit)"
-          test -n "$appimage"
+          shopt -s nullglob
+          appimages=(target/release/bundle/appimage/*.AppImage)
+          test "${#appimages[@]}" -eq 1
+          appimage="${appimages[0]}"
           manifest_script="scripts/generate-update-manifest.mjs"
           if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
             test "$(git -C .release-tools rev-parse HEAD)" = "$WORKFLOW_COMMIT"
