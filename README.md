@@ -59,7 +59,9 @@ trackers. Remote `.torrent` URLs remain deferred until embedded endpoints can be
 network dispatch.
 BitTorrent is an explicit, direct-connection-only action: QuiverDL shows a privacy confirmation
 before starting, rejects System/Custom HTTP proxy modes that cannot cover peer traffic, and disables
-DHT, local discovery, incoming listeners, uploading, and post-completion seeding.
+DHT, local discovery, incoming listeners, uploading, and post-completion seeding. Tracker announces
+use a bounded HTTPS-only client with pinned public DNS answers and redirects disabled; only filtered
+public peer addresses are handed to the torrent engine.
 
 Media downloading uses the yt-dlp Python API. Install Python 3 and yt-dlp on the machine running
 QuiverDL; install FFmpeg when merging separate video/audio streams or extracting MP3/M4A audio:

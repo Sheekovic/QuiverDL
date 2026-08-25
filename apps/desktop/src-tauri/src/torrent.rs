@@ -1,6 +1,6 @@
 use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    collections::{HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -13,6 +13,9 @@ use librqbit::{
     AddTorrent, AddTorrentOptions, ConnectionOptions, ManagedTorrent, Session, SessionOptions,
     TorrentStatsState,
 };
+use librqbit_bencode::{BencodeValue, BencodeValueBorrowed, from_bytes};
+use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
 use url::Url;
@@ -28,8 +31,11 @@ link-local-v4:169.254.0.0-169.254.255.255
 private-v4-b:172.16.0.0-172.31.255.255
 ietf-protocol-v4:192.0.0.0-192.0.0.255
 documentation-v4-a:192.0.2.0-192.0.2.255
+as112-v4:192.31.196.0-192.31.196.255
+amt-v4:192.52.193.0-192.52.193.255
 deprecated-relay-v4:192.88.99.0-192.88.99.255
 private-v4-c:192.168.0.0-192.168.255.255
+as112-direct-v4:192.175.48.0-192.175.48.255
 benchmark-v4:198.18.0.0-198.19.255.255
 documentation-v4-b:198.51.100.0-198.51.100.255
 documentation-v4-c:203.0.113.0-203.0.113.255
@@ -37,14 +43,23 @@ multicast-v4:224.0.0.0-239.255.255.255
 reserved-v4:240.0.0.0-255.255.255.255
 unspecified-v6:::-::
 loopback-v6:::1-::1
+ipv4-mapped-v6:::ffff:0:0-::ffff:ffff:ffff
+nat64-well-known-v6:64:ff9b::-64:ff9b::ffff:ffff
+nat64-local-v6:64:ff9b:1::-64:ff9b:1:ffff:ffff:ffff:ffff:ffff
 discard-v6:100::-100::ffff:ffff:ffff:ffff
 ietf-protocol-v6:2001::-2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff
 documentation-v6:2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff
 six-to-four-v6:2002::-2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+documentation-v6-2:3fff::-3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff
+segment-routing-v6:5f00::-5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 unique-local-v6:fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 link-local-v6:fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 multicast-v6:ff00::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 "#;
+
+const MAX_TRACKERS: usize = 32;
+const MAX_TRACKER_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_INITIAL_PEERS: usize = 200;
 
 struct ActiveTorrent {
     session: Arc<Session>,
@@ -150,7 +165,12 @@ pub(crate) async fn start_torrent_download(
     .await?;
     let source = validate_torrent_source(&request.source)?;
     let trackers = validate_magnet_trackers(&source)?;
-    validate_tracker_addresses(&trackers).await?;
+    let approved_trackers = resolve_tracker_addresses(&trackers, &control).await?;
+    let initial_peers = fetch_tracker_peers(&source, &approved_trackers, &control).await?;
+    control
+        .checkpoint()
+        .await
+        .map_err(|error| error.to_string())?;
     let destination = prepare_destination_directory(&request.destination_directory).await?;
     let job_destination = destination.join(format!("QuiverDL-{task_id}"));
     tokio::fs::create_dir_all(&job_destination)
@@ -173,6 +193,7 @@ pub(crate) async fn start_torrent_download(
         dht: None,
         listen: None,
         connect: Some(ConnectionOptions::default()),
+        disable_trackers: true,
         concurrent_init_limit: Some(1),
         peer_limit: Some(80),
         blocklist_url: Some(blocklist_url),
@@ -180,13 +201,20 @@ pub(crate) async fn start_torrent_download(
         disable_local_service_discovery: true,
         ..SessionOptions::default()
     };
-    let session_result = Session::new_with_opts(job_destination, session_options).await;
+    let session_result = tokio::select! {
+        result = Session::new_with_opts(job_destination, session_options) => result,
+        _ = control.cancelled() => {
+            let _ = tokio::fs::remove_file(&blocklist_path).await;
+            return Err("download was cancelled".into());
+        }
+    };
     let _ = tokio::fs::remove_file(&blocklist_path).await;
     let session = session_result
         .map_err(|error| friendly_torrent_error("Could not initialize BitTorrent", &error))?;
     let options = AddTorrentOptions {
         // Each task owns an isolated folder, so rqbit can safely verify and resume its own files.
         overwrite: true,
+        initial_peers: Some(initial_peers),
         ..AddTorrentOptions::default()
     };
     let added = tokio::select! {
@@ -383,7 +411,7 @@ fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
         if key != "tr" {
             continue;
         }
-        if trackers.len() >= 32 {
+        if trackers.len() >= MAX_TRACKERS {
             return Err("The magnet link contains too many trackers".into());
         }
         let tracker = Url::parse(&value).map_err(|_| "A magnet tracker URL is invalid")?;
@@ -391,6 +419,7 @@ fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
             || tracker.host().is_none()
             || !tracker.username().is_empty()
             || tracker.password().is_some()
+            || tracker.fragment().is_some()
         {
             return Err("Only credential-free HTTPS magnet trackers are supported".into());
         }
@@ -407,25 +436,188 @@ fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
     Ok(trackers)
 }
 
-async fn validate_tracker_addresses(trackers: &[Url]) -> Result<(), String> {
+async fn resolve_tracker_addresses(
+    trackers: &[Url],
+    control: &quiver_core::DownloadControl,
+) -> Result<Vec<(Url, Vec<SocketAddr>)>, String> {
+    let mut approved = Vec::with_capacity(trackers.len());
     for tracker in trackers {
         let host = tracker
             .host_str()
             .ok_or_else(|| "A magnet tracker URL has no host".to_string())?;
         let port = tracker.port_or_known_default().unwrap_or(443);
-        let addresses = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::net::lookup_host((host, port)),
-        )
-        .await
-        .map_err(|_| "A magnet tracker DNS lookup timed out".to_string())?
-        .map_err(|_| "A magnet tracker host could not be resolved".to_string())?
-        .collect::<Vec<_>>();
+        let addresses = tokio::select! {
+            result = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::net::lookup_host((host, port)),
+            ) => result
+                .map_err(|_| "A magnet tracker DNS lookup timed out".to_string())?
+                .map_err(|_| "A magnet tracker host could not be resolved".to_string())?
+                .collect::<Vec<_>>(),
+            _ = control.cancelled() => return Err("download was cancelled".into()),
+        };
         if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
             return Err("Local and special-use magnet tracker addresses are blocked".into());
         }
+        approved.push((tracker.clone(), addresses));
     }
-    Ok(())
+    Ok(approved)
+}
+
+async fn fetch_tracker_peers(
+    source: &str,
+    trackers: &[(Url, Vec<SocketAddr>)],
+    control: &quiver_core::DownloadControl,
+) -> Result<Vec<SocketAddr>, String> {
+    let magnet =
+        librqbit::Magnet::parse(source).map_err(|_| "The magnet link is invalid".to_string())?;
+    let info_hash = magnet.as_id20().ok_or_else(|| {
+        "Only BitTorrent v1 or hybrid magnet links are currently supported".to_string()
+    })?;
+    let mut peer_id = [0_u8; 20];
+    peer_id[..8].copy_from_slice(b"-QD0200-");
+    rand::rng().fill_bytes(&mut peer_id[8..]);
+
+    let mut client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20));
+    for (tracker, addresses) in trackers {
+        let host = tracker
+            .host_str()
+            .ok_or_else(|| "A magnet tracker URL has no host".to_string())?;
+        client = client.resolve_to_addrs(host, addresses);
+    }
+    let client = client
+        .build()
+        .map_err(|_| "Could not create the protected tracker client".to_string())?;
+
+    let mut peers = HashSet::new();
+    for (tracker, _) in trackers {
+        let announce = tracker_announce_url(tracker, &info_hash.0, &peer_id)?;
+        let response = tokio::select! {
+            result = client.get(announce).send() => result
+                .map_err(|_| "An HTTPS tracker request failed".to_string())?,
+            _ = control.cancelled() => return Err("download was cancelled".into()),
+        };
+        if !response.status().is_success() {
+            return Err(
+                "An HTTPS tracker refused the announce without an approved response".into(),
+            );
+        }
+        let body = read_bounded_tracker_response(response, control).await?;
+        for peer in parse_tracker_peers(&body)? {
+            if !peers.insert(peer) {
+                continue;
+            }
+            if peers.len() > MAX_INITIAL_PEERS {
+                return Err("A tracker returned too many peers".into());
+            }
+        }
+    }
+    if peers.is_empty() {
+        return Err("The approved HTTPS trackers returned no usable peers".into());
+    }
+    Ok(peers.into_iter().collect())
+}
+
+fn tracker_announce_url(
+    tracker: &Url,
+    info_hash: &[u8; 20],
+    peer_id: &[u8; 20],
+) -> Result<Url, String> {
+    let mut announce = tracker.clone();
+    let existing = announce.query().unwrap_or_default();
+    let request = format!(
+        "info_hash={}&peer_id={}&port=0&uploaded=0&downloaded=0&left=1&compact=1&no_peer_id=1&numwant={MAX_INITIAL_PEERS}",
+        percent_encode(info_hash, NON_ALPHANUMERIC),
+        percent_encode(peer_id, NON_ALPHANUMERIC),
+    );
+    let query = if existing.is_empty() {
+        request
+    } else {
+        format!("{existing}&{request}")
+    };
+    announce.set_query(Some(&query));
+    announce.set_fragment(None);
+    Ok(announce)
+}
+
+async fn read_bounded_tracker_response(
+    mut response: reqwest::Response,
+    control: &quiver_core::DownloadControl,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_TRACKER_RESPONSE_BYTES as u64)
+    {
+        return Err("A tracker response exceeded the safety limit".into());
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = tokio::select! {
+            result = response.chunk() => result
+                .map_err(|_| "Could not read the HTTPS tracker response".to_string())?,
+            _ = control.cancelled() => return Err("download was cancelled".into()),
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        if body.len().saturating_add(chunk.len()) > MAX_TRACKER_RESPONSE_BYTES {
+            return Err("A tracker response exceeded the safety limit".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn parse_tracker_peers(body: &[u8]) -> Result<Vec<SocketAddr>, String> {
+    let value: BencodeValueBorrowed<'_> =
+        from_bytes(body).map_err(|_| "The HTTPS tracker response is invalid".to_string())?;
+    let BencodeValue::Dict(fields) = value else {
+        return Err("The HTTPS tracker response is invalid".into());
+    };
+    if fields.keys().any(|key| key.as_ref() == b"failure reason") {
+        return Err("The HTTPS tracker rejected the announce".into());
+    }
+    let mut peers = Vec::new();
+    for (key, value) in fields {
+        let bytes = match (key.as_ref(), value) {
+            (b"peers", BencodeValue::Bytes(bytes)) => (bytes.as_ref().to_vec(), 6_usize),
+            (b"peers6", BencodeValue::Bytes(bytes)) => (bytes.as_ref().to_vec(), 18_usize),
+            (b"peers" | b"peers6", _) => {
+                return Err("Only compact tracker peer responses are supported".into());
+            }
+            _ => continue,
+        };
+        if bytes.0.len() % bytes.1 != 0 {
+            return Err("The HTTPS tracker returned malformed peer addresses".into());
+        }
+        for entry in bytes.0.chunks_exact(bytes.1) {
+            let address = if bytes.1 == 6 {
+                SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(entry[0], entry[1], entry[2], entry[3])),
+                    u16::from_be_bytes([entry[4], entry[5]]),
+                )
+            } else {
+                let mut octets = [0_u8; 16];
+                octets.copy_from_slice(&entry[..16]);
+                SocketAddr::new(
+                    IpAddr::V6(Ipv6Addr::from(octets)),
+                    u16::from_be_bytes([entry[16], entry[17]]),
+                )
+            };
+            if address.port() == 0 || !is_public_ip(address.ip()) {
+                return Err("A tracker returned a blocked peer address".into());
+            }
+            peers.push(address);
+            if peers.len() > MAX_INITIAL_PEERS {
+                return Err("A tracker returned too many peers".into());
+            }
+        }
+    }
+    Ok(peers)
 }
 
 fn is_public_ip(address: IpAddr) -> bool {
@@ -454,13 +646,22 @@ fn is_public_ipv4(address: Ipv4Addr) -> bool {
 }
 
 fn is_public_ipv6(address: Ipv6Addr) -> bool {
+    if let Some(mapped) = address.to_ipv4_mapped() {
+        return is_public_ipv4(mapped);
+    }
     let segments = address.segments();
     !(address.is_loopback()
         || address.is_unspecified()
         || address.is_multicast()
+        || (segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2] <= 1)
+        || (segments[0] == 0x0100 && segments[1] == 0)
+        || (segments[0] == 0x2001 && (segments[1] & 0xfe00) == 0)
         || (segments[0] & 0xfe00) == 0xfc00
         || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        || segments[0] == 0x2002
+        || (segments[0] & 0xfff0) == 0x3ff0
+        || segments[0] == 0x5f00)
 }
 
 async fn prepare_destination_directory(value: &str) -> Result<PathBuf, String> {
@@ -509,7 +710,8 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::{
-        is_public_ip, sanitized_network_origins, validate_network_start, validate_torrent_source,
+        is_public_ip, parse_tracker_peers, sanitized_network_origins, tracker_announce_url,
+        validate_network_start, validate_torrent_source,
     };
     use crate::persistence::AppSettings;
 
@@ -563,9 +765,41 @@ mod tests {
         assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
         assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
         assert!(!is_public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(!is_public_ip(IpAddr::V6(
+            "::ffff:127.0.0.1".parse().unwrap()
+        )));
+        assert!(!is_public_ip(IpAddr::V6(
+            "::ffff:10.0.0.1".parse().unwrap()
+        )));
         assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
         assert!(is_public_ip(IpAddr::V6(
             "2606:4700:4700::1111".parse().unwrap()
         )));
+    }
+
+    #[test]
+    fn parses_only_compact_public_tracker_peers() {
+        let response = b"d5:peers6:\x01\x01\x01\x01\x1a\xe1e";
+        assert_eq!(
+            parse_tracker_peers(response).unwrap(),
+            ["1.1.1.1:6881".parse().unwrap()]
+        );
+
+        let mut mapped_private = b"d6:peers618:".to_vec();
+        mapped_private.extend_from_slice(&"::ffff:127.0.0.1".parse::<Ipv6Addr>().unwrap().octets());
+        mapped_private.extend_from_slice(&6881_u16.to_be_bytes());
+        mapped_private.push(b'e');
+        assert!(parse_tracker_peers(&mapped_private).is_err());
+    }
+
+    #[test]
+    fn tracker_announce_keeps_the_approved_origin_and_drops_fragments() {
+        let tracker =
+            url::Url::parse("https://tracker.example/announce?passkey=private#ignored").unwrap();
+        let announce = tracker_announce_url(&tracker, &[1; 20], &[2; 20]).unwrap();
+        assert_eq!(announce.origin(), tracker.origin());
+        assert!(announce.fragment().is_none());
+        assert!(announce.query().unwrap().starts_with("passkey=private&"));
+        assert!(announce.query().unwrap().contains("info_hash="));
     }
 }

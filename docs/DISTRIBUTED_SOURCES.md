@@ -42,9 +42,11 @@ The first BitTorrent adapter uses maintained `librqbit` behind a narrow desktop 
 transfer requires an explicit privacy confirmation and an isolated task directory. It runs only in
 Direct connection mode, with DHT, local discovery, incoming listeners, uploading, and
 post-completion seeding disabled. Tracker contact, outbound TCP peers, and peer exchange remain
-visible in the disclosure. Magnet trackers must use HTTPS and resolve only to public addresses
-before dispatch. Remote `.torrent` URLs, SOCKS routing, incoming connections, DHT, uTP, port
-mapping, automatic capture, and background seeding remain deferred behind separate review.
+visible in the disclosure. Magnet trackers use bounded HTTPS requests with pinned public DNS
+answers and redirects disabled; tracker and peer-exchange results are filtered through a
+special-use address blocklist. Remote `.torrent` URLs, SOCKS routing, incoming connections, DHT,
+uTP, port mapping, automatic capture, and background seeding remain deferred behind separate
+review.
 
 ## References
 
