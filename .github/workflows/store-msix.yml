@@ -198,8 +198,9 @@ jobs:
           }
           $packageDirectory = Split-Path -Parent $env:PACKAGE_PATH
           msstore publish $packageDirectory `
-            --inputFile $env:PACKAGE_PATH `
-            --appId $env:STORE_PRODUCT_ID
+            --inputDirectory $packageDirectory `
+            --appId $env:STORE_PRODUCT_ID `
+            --uploadTimeout 600
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store package submission failed' }
           msstore submission status $env:STORE_PRODUCT_ID
           if ($LASTEXITCODE -ne 0) { throw 'Could not read the new Store submission status' }
