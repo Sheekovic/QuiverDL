@@ -18,6 +18,7 @@ use tokio::{
 use url::Url;
 
 use crate::persistence::AppSettings;
+use crate::proxy_credentials::load_proxy_password;
 
 const MAX_BRIDGE_STDERR_BYTES: u64 = 64 * 1024;
 
@@ -183,10 +184,11 @@ pub(crate) fn cancel_media_download(
 async fn run_bridge(
     app: &AppHandle,
     settings: &AppSettings,
-    request: Value,
+    mut request: Value,
     cancelled: Option<Arc<AtomicBool>>,
     on_event: Option<Channel<MediaProgress>>,
 ) -> Result<Vec<Value>, String> {
+    apply_media_proxy(&mut request, settings).await?;
     let bridge = media_bridge_path(app)?;
     let candidates = python_candidates(&settings.media_python_path);
     let mut last_spawn_error = None;
@@ -309,6 +311,46 @@ async fn run_bridge(
     ))
 }
 
+async fn apply_media_proxy(request: &mut Value, settings: &AppSettings) -> Result<(), String> {
+    let request = request
+        .as_object_mut()
+        .ok_or_else(|| "Could not prepare the media request".to_string())?;
+    match settings.proxy_mode.as_str() {
+        "disabled" => {
+            request.insert("proxy".into(), Value::String(String::new()));
+        }
+        "system" => {}
+        "custom" => {
+            let mut endpoint = Url::parse(settings.proxy_url.trim())
+                .map_err(|_| "The custom proxy URL is invalid".to_string())?;
+            if !settings.proxy_username.is_empty() {
+                let password =
+                    load_proxy_password(endpoint.to_string(), settings.proxy_username.clone())
+                        .await?
+                        .ok_or_else(|| {
+                            "Save proxy credentials for the configured username before connecting"
+                                .to_string()
+                        })?;
+                endpoint
+                    .set_username(&settings.proxy_username)
+                    .map_err(|_| "The proxy username could not be applied".to_string())?;
+                endpoint
+                    .set_password(Some(&password))
+                    .map_err(|_| "The proxy password could not be applied".to_string())?;
+            }
+            request.insert("proxy".into(), Value::String(endpoint.into()));
+            if !settings.proxy_bypass.trim().is_empty() {
+                request.insert(
+                    "proxyBypass".into(),
+                    Value::String(settings.proxy_bypass.trim().to_owned()),
+                );
+            }
+        }
+        _ => return Err("Unsupported proxy mode".into()),
+    }
+    Ok(())
+}
+
 fn media_bridge_path(app: &AppHandle) -> Result<PathBuf, String> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/quiver_media.py");
     if development.is_file() {
@@ -386,7 +428,10 @@ async fn prepare_media_destination(value: &str) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_media_url, validate_quality};
+    use serde_json::json;
+
+    use super::{apply_media_proxy, validate_media_url, validate_quality};
+    use crate::persistence::AppSettings;
 
     #[test]
     fn validates_media_urls_without_leaking_credentials() {
@@ -402,5 +447,37 @@ mod tests {
         assert!(validate_quality("audio-mp3").is_ok());
         assert!(validate_quality("format:137").is_ok());
         assert!(validate_quality("format:../../secret").is_err());
+    }
+
+    #[tokio::test]
+    async fn media_requests_follow_the_active_proxy_mode() {
+        let mut direct_request = json!({ "action": "inspect" });
+        apply_media_proxy(&mut direct_request, &AppSettings::default())
+            .await
+            .unwrap();
+        assert_eq!(direct_request["proxy"], "");
+
+        let system_settings = AppSettings {
+            proxy_mode: "system".into(),
+            ..AppSettings::default()
+        };
+        let mut system_request = json!({ "action": "inspect" });
+        apply_media_proxy(&mut system_request, &system_settings)
+            .await
+            .unwrap();
+        assert!(system_request.get("proxy").is_none());
+
+        let custom_settings = AppSettings {
+            proxy_mode: "custom".into(),
+            proxy_url: "http://proxy.example:8080".into(),
+            proxy_bypass: "localhost,.internal.example".into(),
+            ..AppSettings::default()
+        };
+        let mut custom_request = json!({ "action": "download" });
+        apply_media_proxy(&mut custom_request, &custom_settings)
+            .await
+            .unwrap();
+        assert_eq!(custom_request["proxy"], "http://proxy.example:8080/");
+        assert_eq!(custom_request["proxyBypass"], "localhost,.internal.example");
     }
 }

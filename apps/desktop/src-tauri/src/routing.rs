@@ -74,7 +74,8 @@ fn validate_absolute_folder(value: &str) -> Result<PathBuf, String> {
 }
 
 fn validate_relative_category(value: &str) -> Result<PathBuf, String> {
-    let path = Path::new(value.trim());
+    let value = value.trim();
+    let path = Path::new(value);
     if value.is_empty()
         || value.chars().count() > 240
         || value.chars().any(char::is_control)
@@ -98,6 +99,7 @@ mod tests {
     #[test]
     fn category_paths_cannot_escape_the_default_folder() {
         assert!(validate_relative_category("Video/Clips").is_ok());
+        assert!(validate_relative_category("   ").is_err());
         assert!(validate_relative_category("../Private").is_err());
         assert!(validate_relative_category("/absolute").is_err());
     }

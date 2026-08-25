@@ -95,7 +95,24 @@ def quality_options(quality: str) -> tuple[str, list[dict[str, Any]]]:
     raise ValueError("The selected media quality is unsupported")
 
 
-def inspect_media(ydl_class: Any, url: str) -> None:
+def apply_proxy(options: dict[str, Any], request: dict[str, Any]) -> None:
+    proxy = request.get("proxy")
+    if proxy is not None:
+        if not isinstance(proxy, str) or len(proxy) > 16 * 1024:
+            raise ValueError("The media proxy configuration is invalid")
+        options["proxy"] = proxy
+
+
+def configure_proxy_bypass(ydl: Any, request: dict[str, Any]) -> None:
+    bypass = request.get("proxyBypass")
+    if bypass is None:
+        return
+    if not isinstance(bypass, str) or len(bypass) > 8 * 1024 or any(ord(char) < 32 for char in bypass):
+        raise ValueError("The media proxy bypass list is invalid")
+    ydl.proxies["no"] = bypass
+
+
+def inspect_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -103,7 +120,9 @@ def inspect_media(ydl_class: Any, url: str) -> None:
         "socket_timeout": 30,
         "skip_download": True,
     }
+    apply_proxy(options, request)
     with ydl_class(options) as ydl:
+        configure_proxy_bypass(ydl, request)
         info = ydl.extract_info(url, download=False)
         sanitized = ydl.sanitize_info(info)
     emit({"type": "metadata", "metadata": format_metadata(sanitized)})
@@ -126,7 +145,7 @@ def download_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     quality = str(request.get("quality") or "best")
     selector, postprocessors = quality_options(quality)
-    final_path: list[str] = []
+    reported_paths: list[str] = []
     last_progress: dict[str, Any] = {"downloaded": 0, "total": None}
 
     def progress_hook(data: dict[str, Any]) -> None:
@@ -147,7 +166,7 @@ def download_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
         elif status == "finished":
             filename = data.get("filename")
             if isinstance(filename, str):
-                final_path[:] = [filename]
+                reported_paths.append(filename)
             emit({
                 "type": "progress",
                 "status": "verifying",
@@ -159,7 +178,7 @@ def download_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
         info = data.get("info_dict") or {}
         filepath = info.get("filepath") or data.get("filepath")
         if isinstance(filepath, str):
-            final_path[:] = [filepath]
+            reported_paths.append(filepath)
         if data.get("status") == "started":
             emit({
                 "type": "progress",
@@ -184,18 +203,34 @@ def download_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
         "postprocessor_hooks": [postprocessor_hook],
         "postprocessors": postprocessors,
     }
+    apply_proxy(options, request)
     with ydl_class(options) as ydl:
+        configure_proxy_bypass(ydl, request)
         info = ydl.extract_info(url, download=True)
-        if not final_path:
+        if isinstance(info, dict):
+            for item in info.get("requested_downloads") or []:
+                if isinstance(item, dict) and isinstance(item.get("filepath"), str):
+                    reported_paths.append(item["filepath"])
+            for key in ("filepath", "_filename"):
+                if isinstance(info.get(key), str):
+                    reported_paths.append(info[key])
             prepared = ydl.prepare_filename(info)
-            final_path.append(prepared)
-    resolved = Path(final_path[-1]).resolve()
-    if os.path.commonpath([str(destination), str(resolved)]) != str(destination):
-        raise RuntimeError("yt-dlp returned a file outside the selected destination")
-    if not resolved.is_file():
-        candidates = sorted(destination.glob("*"), key=lambda item: item.stat().st_mtime, reverse=True)
-        resolved = next((item.resolve() for item in candidates if item.is_file() and not item.name.endswith((".part", ".ytdl"))), resolved)
-    if not resolved.is_file():
+            if isinstance(prepared, str):
+                reported_paths.append(prepared)
+
+    resolved = None
+    for reported in reversed(reported_paths):
+        candidate = Path(reported).resolve()
+        try:
+            inside_destination = os.path.commonpath([str(destination), str(candidate)]) == str(destination)
+        except ValueError:
+            inside_destination = False
+        if not inside_destination:
+            raise RuntimeError("yt-dlp returned a file outside the selected destination")
+        if candidate.is_file():
+            resolved = candidate
+            break
+    if resolved is None:
         raise RuntimeError("yt-dlp completed without producing a media file")
     emit(
         {
@@ -220,7 +255,7 @@ def main() -> None:
     if action == "detect":
         detect_media(url)
     elif action == "inspect":
-        inspect_media(YoutubeDL, url)
+        inspect_media(YoutubeDL, request, url)
     elif action == "download":
         download_media(YoutubeDL, request, url)
     else:

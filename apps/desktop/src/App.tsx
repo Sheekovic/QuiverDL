@@ -472,6 +472,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [clipboardCandidate, setClipboardCandidate] = useState<ClipboardCandidate | null>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+  const settingsModalRef = useRef<HTMLElement>(null);
+  const settingsOpenerRef = useRef<HTMLElement | null>(null);
   const t = (key: MessageKey) => translate(settings.language, key);
 
   useEffect(() => {
@@ -677,12 +679,52 @@ function App() {
 
   useEffect(() => {
     if (!settingsOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSettingsOpen(false);
+    const modal = settingsModalRef.current;
+    const opener = settingsOpenerRef.current;
+    const focusableElements = () => Array.from(
+      modal?.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    ).filter((element) => !element.hasAttribute("hidden"));
+    const containFocus = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSettingsOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        modal?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !modal?.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", containFocus);
+    return () => {
+      window.removeEventListener("keydown", containFocus);
+      opener?.focus();
+    };
   }, [settingsOpen]);
+
+  function openSettings(opener: HTMLElement) {
+    settingsOpenerRef.current = opener;
+    setSettingsOpen(true);
+  }
+
+  function closeSettings() {
+    setSettingsOpen(false);
+  }
 
   useEffect(() => {
     void invoke("set_global_speed_limit", {
@@ -1669,21 +1711,21 @@ function App() {
           {t("privateDesign")}
           <small>{t("noTelemetry")}</small>
         </div>
-        <button className="sidebar-settings-button" type="button" onClick={() => setSettingsOpen(true)}>
+        <button className="sidebar-settings-button" type="button" onClick={(event) => openSettings(event.currentTarget)}>
           <span aria-hidden="true">⚙</span>
           {t("settings")}
         </button>
         {settingsOpen && (
           <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSettingsOpen(false);
+            if (event.target === event.currentTarget) closeSettings();
           }}>
-            <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <section ref={settingsModalRef} className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
               <div className="settings-modal-header">
                 <div>
                   <p className="eyebrow">QUIVERDL CONTROL CENTER</p>
                   <h2 id="settings-title">{t("settings")}</h2>
                 </div>
-                <button type="button" aria-label="Close settings" autoFocus onClick={() => setSettingsOpen(false)}>×</button>
+                <button type="button" aria-label="Close settings" autoFocus onClick={closeSettings}>×</button>
               </div>
               <div className="settings-panel settings-modal-body">
           <label>
@@ -2019,7 +2061,7 @@ function App() {
             Clipboard {settings.clipboardMonitoring ? "on" : "off"}
           </button>
           <button type="button" onClick={() => setFilter("completed")}>History</button>
-          <button type="button" onClick={() => setSettingsOpen(true)}>Settings</button>
+          <button type="button" onClick={(event) => openSettings(event.currentTarget)}>Settings</button>
         </div>
 
         {UPDATER_ENABLED && availableUpdateVersion && (

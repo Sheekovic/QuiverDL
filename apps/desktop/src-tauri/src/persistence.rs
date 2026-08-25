@@ -233,8 +233,9 @@ impl AppSettings {
             {
                 return Err("Category names must be unique and between 1 and 64 characters".into());
             }
-            let folder = Path::new(category.folder.trim());
-            if category.folder.is_empty()
+            let category_folder = category.folder.trim();
+            let folder = Path::new(category_folder);
+            if category_folder.is_empty()
                 || category.folder.chars().count() > 240
                 || category.folder.chars().any(char::is_control)
                 || folder.is_absolute()
@@ -711,6 +712,13 @@ mod tests {
             max_segments: 255,
             ..AppSettings::default()
         };
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_whitespace_only_category_folders() {
+        let mut settings = AppSettings::default();
+        settings.categories[0].folder = "   ".into();
         assert!(settings.validate().is_err());
     }
 
