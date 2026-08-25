@@ -142,8 +142,8 @@ assert.ok(
 );
 assert.match(
   storeWorkflow,
-  /msstore publish \$packageDirectory `[\s\S]*?--inputFile \$env:PACKAGE_PATH `[\s\S]*?--appId \$env:STORE_PRODUCT_ID/,
-  "Microsoft Store CLI must receive the built MSIX through --inputFile",
+  /msstore publish \$packageDirectory `[\s\S]*?--inputDirectory \$packageDirectory `[\s\S]*?--appId \$env:STORE_PRODUCT_ID `[\s\S]*?--uploadTimeout 600/,
+  "Microsoft Store CLI must receive the validated package directory and a bounded upload timeout",
 );
 assert.equal(
   topLevelYamlString(snapcraft, "version"),
