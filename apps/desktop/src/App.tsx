@@ -168,6 +168,7 @@ type TorrentInspection = {
   sourceUrl: string;
   name: string;
   sourceType: "magnet" | "torrentFile";
+  networkOrigins: string[];
 };
 
 type TorrentProgress = {
@@ -418,6 +419,7 @@ function App() {
   const [inspection, setInspection] = useState<LinkInspection | null>(null);
   const [mediaInspection, setMediaInspection] = useState<MediaInspection | null>(null);
   const [torrentInspection, setTorrentInspection] = useState<TorrentInspection | null>(null);
+  const [torrentPrivacyConfirmed, setTorrentPrivacyConfirmed] = useState(false);
   const [mediaQuality, setMediaQuality] = useState("best");
   const [sourceMode, setSourceMode] = useState<SourceMode>("auto");
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
@@ -519,10 +521,20 @@ function App() {
     void (async () => {
       const registered: DownloadItem[] = [];
       for (const item of pending) {
+        if (item.kind === "torrent") {
+          updateDownload(item.id, {
+            status: "failed",
+            error: "Review and confirm the BitTorrent privacy disclosure again after restarting QuiverDL.",
+          });
+          continue;
+        }
         if (await registerDownload(item, settings)) registered.push(item);
       }
       recoveryGate.current?.release();
-      for (const item of registered) void executeDownload(item, settings);
+      for (const item of registered) {
+        if (item.kind === "media") void executeMediaDownload(item, settings);
+        else void executeDownload(item, settings);
+      }
     })();
   }, [stateReady]);
 
@@ -676,6 +688,10 @@ function App() {
       stopListening?.();
     };
   }, []);
+
+  useEffect(() => {
+    setTorrentPrivacyConfirmed(false);
+  }, [torrentInspection?.sourceUrl]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -943,7 +959,7 @@ function App() {
       setUrl("");
       setTorrentInspection(null);
       setSourceMode("auto");
-      void runTorrentDownload(selected.sourceUrl, destination, selected.name);
+      void runTorrentDownload(selected.sourceUrl, destination, selected.name, undefined, true);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -1258,18 +1274,26 @@ function App() {
   ) {
     await recoveryGate.current?.promise;
     const executionSettings = latestSettings.current;
+    const id = existingId ?? createTaskId();
+    pendingCancellations.current.delete(id);
+    if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
+      setError("The durable queue sequence is exhausted; remove old entries and restart QuiverDL.");
+      return;
+    }
+    const queueSequence = nextQueueSequence.current.toString();
+    nextQueueSequence.current += 1n;
     const item: DownloadItem = {
-      id: existingId ?? createTaskId(),
+      id,
       name: title,
       url: sourceUrl,
       destination: destinationDirectory,
-      status: "starting",
+      status: queueStatus({ scheduledForMs: null }, executionSettings),
       downloadedBytes: 0n,
       totalBytes: null,
       recoverable: false,
       queuedAtMs: Date.now().toString(),
       scheduledForMs: null,
-      queueSequence: null,
+      queueSequence,
       completedAtMs: null,
       kind: "media",
       mediaQuality: quality,
@@ -1301,11 +1325,16 @@ function App() {
       updateDownload(item.id, { status: "failed", error: `Could not durably queue the media download: ${String(cause)}` });
       return;
     }
+    if (!(await registerDownload(item, executionSettings))) return;
     void executeMediaDownload(item, executionSettings);
   }
 
   async function executeMediaDownload(item: DownloadItem, executionSettings: AppSettings) {
-    updateDownload(item.id, { status: "starting", error: undefined, recoverable: false });
+    updateDownload(item.id, {
+      status: queueStatus(item, executionSettings),
+      error: undefined,
+      recoverable: false,
+    });
     const onEvent = new Channel<MediaProgress>();
     onEvent.onmessage = (message) => {
       updateDownload(item.id, (current) => ({
@@ -1343,6 +1372,9 @@ function App() {
         const cancelled = current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
         return { status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : failure };
       });
+    } finally {
+      registeredDownloads.current.delete(item.id);
+      void invoke("discard_registered_download", { taskId: item.id });
     }
   }
 
@@ -1351,21 +1383,34 @@ function App() {
     destinationDirectory: string,
     title: string,
     existingId?: string,
+    privacyConfirmed = false,
   ) {
     await recoveryGate.current?.promise;
     const executionSettings = latestSettings.current;
+    if (!privacyConfirmed) {
+      setError("Review and confirm the BitTorrent privacy disclosure before starting.");
+      return;
+    }
+    const id = existingId ?? createTaskId();
+    pendingCancellations.current.delete(id);
+    if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
+      setError("The durable queue sequence is exhausted; remove old entries and restart QuiverDL.");
+      return;
+    }
+    const queueSequence = nextQueueSequence.current.toString();
+    nextQueueSequence.current += 1n;
     const item: DownloadItem = {
-      id: existingId ?? createTaskId(),
+      id,
       name: title,
       url: sourceUrl,
       destination: destinationDirectory,
-      status: "starting",
+      status: queueStatus({ scheduledForMs: null }, executionSettings),
       downloadedBytes: 0n,
       totalBytes: null,
       recoverable: false,
       queuedAtMs: Date.now().toString(),
       scheduledForMs: null,
-      queueSequence: null,
+      queueSequence,
       completedAtMs: null,
       kind: "torrent",
     };
@@ -1396,11 +1441,20 @@ function App() {
       updateDownload(item.id, { status: "failed", error: `Could not durably queue the torrent: ${String(cause)}` });
       return;
     }
-    void executeTorrentDownload(item);
+    if (!(await registerDownload(item, executionSettings))) return;
+    void executeTorrentDownload(item, executionSettings, privacyConfirmed);
   }
 
-  async function executeTorrentDownload(item: DownloadItem) {
-    updateDownload(item.id, { status: "starting", error: undefined, recoverable: false });
+  async function executeTorrentDownload(
+    item: DownloadItem,
+    executionSettings: AppSettings,
+    privacyConfirmed: boolean,
+  ) {
+    updateDownload(item.id, {
+      status: queueStatus(item, executionSettings),
+      error: undefined,
+      recoverable: false,
+    });
     const onEvent = new Channel<TorrentProgress>();
     onEvent.onmessage = (message) => {
       updateDownload(item.id, (current) => ({
@@ -1414,9 +1468,13 @@ function App() {
     };
     try {
       const summary = await invoke<TorrentSummary>("start_torrent_download", {
-        taskId: item.id,
-        source: item.url,
-        destinationDirectory: item.destination,
+        request: {
+          taskId: item.id,
+          source: item.url,
+          destinationDirectory: item.destination,
+          settings: executionSettings,
+          privacyConfirmed,
+        },
         onEvent,
       });
       const bytesWritten = BigInt(summary.bytesWritten);
@@ -1428,13 +1486,16 @@ function App() {
         totalBytes: bytesWritten,
         completedAtMs: Date.now().toString(),
       });
-      if (latestSettings.current.notifications) void notifyCompleted(summary.name);
+      if (executionSettings.notifications) void notifyCompleted(summary.name);
     } catch (cause) {
       const failure = String(cause);
       updateDownload(item.id, (current) => {
         const cancelled = current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
         return { status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : failure };
       });
+    } finally {
+      registeredDownloads.current.delete(item.id);
+      void invoke("discard_registered_download", { taskId: item.id });
     }
   }
 
@@ -1450,7 +1511,11 @@ function App() {
       return;
     }
     if (item.kind === "torrent") {
-      void runTorrentDownload(item.url, item.destination, item.name, item.id);
+      setUrl(item.url);
+      setSourceMode("torrent");
+      setTorrentInspection(null);
+      setError("Inspect this torrent again and confirm its privacy disclosure before retrying.");
+      urlInputRef.current?.focus();
       return;
     }
     void runDownload(item.url, item.destination, item.id, undefined, null);
@@ -1522,17 +1587,35 @@ function App() {
 
   async function controlDownload(item: DownloadItem, action: "pause" | "resume" | "cancel") {
     setError("");
+    if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
+      pendingCancellations.current.add(item.id);
+      updateDownload(item.id, { status: "cancelling", error: undefined });
+      return;
+    }
     if (item.kind === "media") {
       if (action !== "cancel") return;
       updateDownload(item.id, { status: "cancelling", error: undefined });
-      try {
-        await invoke("cancel_media_download", { taskId: item.id });
-      } catch (cause) {
-        setError(String(cause));
+      const results = await Promise.allSettled([
+        invoke("control_download", { taskId: item.id, action: "cancel" }),
+        invoke("cancel_media_download", { taskId: item.id }),
+      ]);
+      if (results.every((result) => result.status === "rejected")) {
+        setError(String((results[0] as PromiseRejectedResult).reason));
       }
       return;
     }
     if (item.kind === "torrent") {
+      if (action === "cancel") {
+        updateDownload(item.id, { status: "cancelling", error: undefined });
+        const results = await Promise.allSettled([
+          invoke("control_download", { taskId: item.id, action: "cancel" }),
+          invoke("control_torrent_download", { taskId: item.id, action: "cancel" }),
+        ]);
+        if (results.every((result) => result.status === "rejected")) {
+          setError(String((results[0] as PromiseRejectedResult).reason));
+        }
+        return;
+      }
       try {
         await invoke("control_torrent_download", { taskId: item.id, action });
         updateDownload(item.id, {
@@ -1541,11 +1624,6 @@ function App() {
       } catch (cause) {
         setError(String(cause));
       }
-      return;
-    }
-    if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
-      pendingCancellations.current.add(item.id);
-      updateDownload(item.id, { status: "cancelling", error: undefined });
       return;
     }
     try {
@@ -2193,10 +2271,32 @@ function App() {
               <div className="inspection-details">
                 <span className="source-kind">{torrentInspection.sourceType === "magnet" ? "Magnet link" : "Remote .torrent file"}</span>
                 <h3>{torrentInspection.name}</h3>
-                <p>QuiverDL will discover peers and verify every BitTorrent piece before completion.</p>
+                <p>Your IP address and torrent identifier can be visible to trackers and peers.</p>
+                <small>Piece hashes detect corruption; they do not authenticate the publisher.</small>
+                {torrentInspection.networkOrigins.length > 0 && (
+                  <small>Known network origins: {torrentInspection.networkOrigins.join(", ")}</small>
+                )}
+                {torrentInspection.sourceType === "torrentFile" && (
+                  <small>Embedded tracker origins are not known until the confirmed metadata fetch.</small>
+                )}
+                <label className="torrent-consent">
+                  <input
+                    type="checkbox"
+                    checked={torrentPrivacyConfirmed}
+                    onChange={(event) => setTorrentPrivacyConfirmed(event.currentTarget.checked)}
+                  />
+                  <span>
+                    I understand that tracker contact, outbound TCP peer connections, and peer exchange may reveal this download. QuiverDL disables DHT, local discovery, incoming listeners, and uploading. Pause may retain tracker or peer state; cancel or completion stops this torrent session.
+                  </span>
+                </label>
+                {settings.proxyMode !== "disabled" && (
+                  <small className="torrent-proxy-warning">
+                    Torrent startup is blocked while System or Custom HTTP proxy mode is active because it cannot cover every peer transport.
+                  </small>
+                )}
               </div>
-              <button className="primary save-button" type="button" onClick={chooseTorrentDestination} disabled={choosingDestination}>
-                {choosingDestination ? t("opening") : "Choose folder and download"}
+              <button className="primary save-button" type="button" onClick={chooseTorrentDestination} disabled={choosingDestination || !torrentPrivacyConfirmed || settings.proxyMode !== "disabled"}>
+                {choosingDestination ? t("opening") : "I understand — choose folder"}
               </button>
             </div>
           )}

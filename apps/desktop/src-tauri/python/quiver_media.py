@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import urlsplit
+
+
+MAX_THUMBNAIL_BYTES = 384 * 1024
+SAFE_THUMBNAIL_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -31,7 +37,7 @@ def load_request() -> dict[str, Any]:
     return request
 
 
-def format_metadata(info: dict[str, Any]) -> dict[str, Any]:
+def format_metadata(info: dict[str, Any], thumbnail: Optional[str] = None) -> dict[str, Any]:
     formats: list[dict[str, Any]] = []
     seen: set[tuple[Any, ...]] = set()
     for item in info.get("formats") or []:
@@ -72,7 +78,7 @@ def format_metadata(info: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": str(info.get("title") or "Untitled media")[:240],
         "extractor": str(info.get("extractor_key") or info.get("extractor") or "yt-dlp")[:80],
-        "thumbnail": str(info.get("thumbnail"))[:4096] if info.get("thumbnail") else None,
+        "thumbnail": thumbnail,
         "durationSeconds": int(duration) if isinstance(duration, (int, float)) and duration >= 0 else None,
         "formats": formats[:160],
     }
@@ -112,6 +118,32 @@ def configure_proxy_bypass(ydl: Any, request: dict[str, Any]) -> None:
     ydl.proxies["no"] = bypass
 
 
+def fetch_thumbnail(ydl: Any, value: Any) -> Optional[str]:
+    if not isinstance(value, str) or len(value) > 4096:
+        return None
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        return None
+    try:
+        with ydl.urlopen(value) as response:
+            content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+            if content_type not in SAFE_THUMBNAIL_TYPES:
+                return None
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None and int(content_length) > MAX_THUMBNAIL_BYTES:
+                return None
+            data = response.read(MAX_THUMBNAIL_BYTES + 1)
+    except Exception:
+        return None
+    if len(data) > MAX_THUMBNAIL_BYTES:
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
+
+
 def inspect_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
     options = {
         "quiet": True,
@@ -124,8 +156,9 @@ def inspect_media(ydl_class: Any, request: dict[str, Any], url: str) -> None:
     with ydl_class(options) as ydl:
         configure_proxy_bypass(ydl, request)
         info = ydl.extract_info(url, download=False)
+        thumbnail = fetch_thumbnail(ydl, info.get("thumbnail") if isinstance(info, dict) else None)
         sanitized = ydl.sanitize_info(info)
-    emit({"type": "metadata", "metadata": format_metadata(sanitized)})
+    emit({"type": "metadata", "metadata": format_metadata(sanitized, thumbnail)})
 
 
 def detect_media(url: str) -> None:

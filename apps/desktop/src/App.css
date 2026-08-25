@@ -430,6 +430,19 @@ input:focus { border-color: var(--accent); }
 }
 .torrent-inspection h3 { margin: 0; font-size: 15px; }
 .torrent-inspection p { margin: -5px 0 0; color: var(--subtle); font-size: 10px; }
+.torrent-inspection .inspection-details > small { color: var(--subtle); font-size: 9px; overflow-wrap: anywhere; }
+.torrent-consent {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.torrent-consent input { width: auto; margin-top: 2px; }
+.torrent-proxy-warning { color: var(--danger) !important; }
 .torrent-mark {
   display: grid;
   place-items: center;

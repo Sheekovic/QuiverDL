@@ -6,11 +6,11 @@ network policy, and security review.
 
 | Area | Metalink | BitTorrent |
 | --- | --- | --- |
-| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | `.torrent` metainfo; magnets are offline-only |
+| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | Remote `.torrent` URLs and magnet links after explicit consent |
 | Network model | Known HTTP(S) mirrors | Trackers and many untrusted peers over additional protocols |
-| Integrity | Publisher-provided size and SHA-256 | V2 SHA-256 Merkle data; v1-only is inspector-only |
+| Integrity | Publisher-provided size and SHA-256 | BitTorrent piece hashes detect corruption but do not authenticate the publisher |
 | Privacy change | Mirror operators learn requests | Trackers and peers can learn the user's IP address and swarm identifier |
-| QuiverDL decision | Approved for a bounded HTTP-only implementation | Deferred until the isolation and consent gates below are met |
+| QuiverDL decision | Approved for a bounded HTTP-only implementation | Constrained direct-only adapter; advanced transports remain deferred |
 
 The detailed decisions live in [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.md) and
 [BITTORRENT_THREAT_MODEL.md](BITTORRENT_THREAT_MODEL.md).
@@ -26,8 +26,8 @@ The detailed decisions live in [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.
 - New protocols must have explicit queue states and resumable state formats. An HTTP recovery
   sidecar must never be interpreted as peer-to-peer state, or the reverse.
 - Browser integration must remain manual until the relevant backend has shipped and been reviewed.
-  Metalink requires a complete plan before mirror requests. Magnet networking remains deferred and
-  offline inspection cannot enqueue or resolve metadata.
+  Metalink requires a complete plan before mirror requests. Clipboard detection may offer a magnet
+  for review, but it cannot start torrent networking or bypass the confirmation screen.
 - A protocol backend may not weaken destination reservations, no-replace promotion, cancellation,
   resource limits, or final integrity verification.
 
@@ -38,10 +38,12 @@ HTTP(S) and filesystem boundaries. That release is limited to failover between m
 cross-mirror range mixing remains a later optimization that requires its own validator and
 piece-hash tests.
 
-BitTorrent is not approved for implementation in the desktop process yet. A future proposal must
-first select and review a maintained backend, define process or crate isolation, expose the privacy
-and upload behavior before joining a swarm, and prove bounded parsing and filesystem containment.
-This deferral is a security decision, not a claim that BitTorrent itself is unsafe.
+The first BitTorrent adapter uses maintained `librqbit` behind a narrow desktop boundary. Every
+transfer requires an explicit privacy confirmation and an isolated task directory. It runs only in
+Direct connection mode, with DHT, local discovery, incoming listeners, uploading, and
+post-completion seeding disabled. Tracker contact, outbound TCP peers, and peer exchange remain
+visible in the disclosure. SOCKS routing, incoming connections, DHT, uTP, port mapping, automatic
+capture, and background seeding remain deferred behind separate review.
 
 ## References
 

@@ -55,6 +55,9 @@ notification behavior, supports durable scheduled starts and parallel or sequent
 supports direct, system, and credential-safe custom proxy routing, and never silently overwrites a
 destination. It also provides an opt-in clipboard monitor, customizable MIME/extension routing,
 yt-dlp media metadata and quality selection, and native magnet/remote `.torrent` transfers.
+BitTorrent is an explicit, direct-connection-only action: QuiverDL shows a privacy confirmation
+before starting, rejects System/Custom HTTP proxy modes that cannot cover peer traffic, and disables
+DHT, local discovery, incoming listeners, uploading, and post-completion seeding.
 
 Media downloading uses the yt-dlp Python API. Install Python 3 and yt-dlp on the machine running
 QuiverDL; install FFmpeg when merging separate video/audio streams or extracting MP3/M4A audio:

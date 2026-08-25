@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, State, ipc::Channel, path::BaseDirectory};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
 };
 use url::Url;
@@ -21,6 +21,7 @@ use crate::persistence::AppSettings;
 use crate::proxy_credentials::load_proxy_password;
 
 const MAX_BRIDGE_STDERR_BYTES: u64 = 64 * 1024;
+const MAX_BRIDGE_STDOUT_LINE_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 pub(crate) struct MediaRegistry {
@@ -124,12 +125,30 @@ pub(crate) async fn inspect_media_url(
 pub(crate) async fn start_media_download(
     app: AppHandle,
     registry: State<'_, MediaRegistry>,
+    transfer_registry: State<'_, super::TransferRegistry>,
     request: MediaDownloadRequest,
     on_event: Channel<MediaProgress>,
 ) -> Result<MediaSummary, String> {
     let task_id = super::validate_task_id(&request.task_id)?;
     let settings = request.settings.unwrap_or_default();
     settings.validate()?;
+    let (control, queue_ticket, scheduled_for_ms) = super::claim_registered_transfer(
+        &transfer_registry,
+        &task_id,
+        None,
+        settings.queue_mode == "sequential",
+    )?;
+    let _cleanup = super::RegisteredTransferCleanup {
+        registry: &transfer_registry,
+        task_id: task_id.clone(),
+    };
+    let _queue_permit = super::wait_for_queue_turn(
+        &control,
+        scheduled_for_ms,
+        queue_ticket,
+        transfer_registry.sequential_queue.clone(),
+    )
+    .await?;
     let url = validate_media_url(&request.url)?;
     validate_quality(&request.quality)?;
     let destination = prepare_media_destination(&request.destination_directory).await?;
@@ -240,7 +259,17 @@ async fn run_bridge(
                 .await;
             bytes
         });
-        let mut lines = BufReader::new(stdout).lines();
+        macro_rules! fail_bridge {
+            ($message:expr) => {{
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let _ = stderr_task.await;
+                return Err($message);
+            }};
+        }
+        let mut stdout = stdout;
+        let mut stdout_buffer = Vec::new();
+        let mut stdout_closed = false;
         let mut events = Vec::new();
         let mut reported_error = None;
         loop {
@@ -248,38 +277,68 @@ async fn run_bridge(
                 .as_ref()
                 .is_some_and(|flag| flag.load(Ordering::Acquire))
             {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                let _ = stderr_task.await;
-                return Err("download was cancelled".into());
+                fail_bridge!("download was cancelled".into());
             }
-            let next =
-                tokio::time::timeout(std::time::Duration::from_millis(150), lines.next_line())
+            let line_bytes =
+                if let Some(newline) = stdout_buffer.iter().position(|byte| *byte == b'\n') {
+                    stdout_buffer.drain(..=newline).collect::<Vec<_>>()
+                } else if stdout_buffer.len() > MAX_BRIDGE_STDOUT_LINE_BYTES {
+                    fail_bridge!("The media engine returned an oversized response".into());
+                } else if stdout_closed {
+                    if stdout_buffer.is_empty() {
+                        break;
+                    }
+                    std::mem::take(&mut stdout_buffer)
+                } else {
+                    let remaining = MAX_BRIDGE_STDOUT_LINE_BYTES
+                        .saturating_add(1)
+                        .saturating_sub(stdout_buffer.len());
+                    let mut chunk = [0_u8; 8 * 1024];
+                    let read_capacity = chunk.len().min(remaining);
+                    let read = tokio::time::timeout(
+                        std::time::Duration::from_millis(150),
+                        stdout.read(&mut chunk[..read_capacity]),
+                    )
                     .await;
-            let line = match next {
-                Err(_) => continue,
-                Ok(Err(error)) => return Err(format!("Could not read media progress: {error}")),
-                Ok(Ok(None)) => break,
-                Ok(Ok(Some(line))) => line,
+                    match read {
+                        Err(_) => continue,
+                        Ok(Err(error)) => {
+                            fail_bridge!(format!("Could not read media progress: {error}"));
+                        }
+                        Ok(Ok(0)) => stdout_closed = true,
+                        Ok(Ok(read)) => stdout_buffer.extend_from_slice(&chunk[..read]),
+                    }
+                    continue;
+                };
+            let line = match String::from_utf8(
+                line_bytes
+                    .into_iter()
+                    .take_while(|byte| *byte != b'\n')
+                    .collect(),
+            ) {
+                Ok(line) => line,
+                Err(_) => fail_bridge!("The media engine returned invalid text".into()),
             };
-            if line.len() > 1024 * 1024 {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-                let _ = stderr_task.await;
-                return Err("The media engine returned an oversized response".into());
+            let line = line.trim_end_matches('\r');
+            if line.is_empty() {
+                continue;
             }
-            let event: Value = serde_json::from_str(&line)
-                .map_err(|_| "The media engine returned invalid progress data".to_string())?;
+            let event: Value = match serde_json::from_str(line) {
+                Ok(event) => event,
+                Err(_) => fail_bridge!("The media engine returned invalid progress data".into()),
+            };
             match event.get("type").and_then(Value::as_str) {
                 Some("progress") => {
                     if let Some(channel) = &on_event {
-                        let progress: MediaProgress = serde_json::from_value(event.clone())
-                            .map_err(|_| {
-                                "The media engine returned malformed progress".to_string()
-                            })?;
-                        channel
-                            .send(progress)
-                            .map_err(|_| "The media progress listener closed".to_string())?;
+                        let progress: MediaProgress = match serde_json::from_value(event.clone()) {
+                            Ok(progress) => progress,
+                            Err(_) => {
+                                fail_bridge!("The media engine returned malformed progress".into())
+                            }
+                        };
+                        if channel.send(progress).is_err() {
+                            fail_bridge!("The media progress listener closed".into());
+                        }
                     }
                 }
                 Some("error") => {
@@ -289,7 +348,7 @@ async fn run_bridge(
                         .map(str::to_owned);
                 }
                 Some("metadata" | "complete" | "detection") => events.push(event),
-                _ => return Err("The media engine returned an unsupported event".into()),
+                _ => fail_bridge!("The media engine returned an unsupported event".into()),
             }
         }
         let status = child

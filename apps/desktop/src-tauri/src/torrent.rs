@@ -8,10 +8,15 @@ use std::{
     time::Duration,
 };
 
-use librqbit::{AddTorrent, AddTorrentOptions, ManagedTorrent, Session, TorrentStatsState};
-use serde::Serialize;
+use librqbit::{
+    AddTorrent, AddTorrentOptions, ConnectionOptions, ManagedTorrent, Session, SessionOptions,
+    TorrentStatsState,
+};
+use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
 use url::Url;
+
+use crate::persistence::AppSettings;
 
 struct ActiveTorrent {
     session: Arc<Session>,
@@ -46,6 +51,17 @@ pub(crate) struct TorrentSummary {
 pub(crate) struct TorrentInspection {
     name: String,
     source_type: String,
+    network_origins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TorrentDownloadRequest {
+    task_id: String,
+    source: String,
+    destination_directory: String,
+    settings: Option<AppSettings>,
+    privacy_confirmed: bool,
 }
 
 #[tauri::command]
@@ -68,23 +84,44 @@ pub(crate) fn inspect_torrent_source(source: String) -> Result<TorrentInspection
             .unwrap_or("Torrent download");
         (super::sanitize_filename(Some(name)), "torrentFile")
     };
+    let network_origins = sanitized_network_origins(&source);
     Ok(TorrentInspection {
         name,
         source_type: source_type.into(),
+        network_origins,
     })
 }
 
 #[tauri::command]
 pub(crate) async fn start_torrent_download(
     registry: State<'_, TorrentRegistry>,
-    task_id: String,
-    source: String,
-    destination_directory: String,
+    transfer_registry: State<'_, super::TransferRegistry>,
+    request: TorrentDownloadRequest,
     on_event: Channel<TorrentProgress>,
 ) -> Result<TorrentSummary, String> {
-    let task_id = super::validate_task_id(&task_id)?;
-    let source = validate_torrent_source(&source)?;
-    let destination = prepare_destination_directory(&destination_directory).await?;
+    let task_id = super::validate_task_id(&request.task_id)?;
+    let settings = request.settings.unwrap_or_default();
+    settings.validate()?;
+    validate_network_start(&settings, request.privacy_confirmed)?;
+    let (control, queue_ticket, scheduled_for_ms) = super::claim_registered_transfer(
+        &transfer_registry,
+        &task_id,
+        None,
+        settings.queue_mode == "sequential",
+    )?;
+    let _cleanup = super::RegisteredTransferCleanup {
+        registry: &transfer_registry,
+        task_id: task_id.clone(),
+    };
+    let _queue_permit = super::wait_for_queue_turn(
+        &control,
+        scheduled_for_ms,
+        queue_ticket,
+        transfer_registry.sequential_queue.clone(),
+    )
+    .await?;
+    let source = validate_torrent_source(&request.source)?;
+    let destination = prepare_destination_directory(&request.destination_directory).await?;
     let job_destination = destination.join(format!("QuiverDL-{task_id}"));
     tokio::fs::create_dir_all(&job_destination)
         .await
@@ -95,7 +132,17 @@ pub(crate) async fn start_torrent_download(
     if !job_destination.starts_with(&destination) {
         return Err("The torrent folder escapes the selected destination".into());
     }
-    let session = Session::new(job_destination)
+    let session_options = SessionOptions {
+        dht: None,
+        listen: None,
+        connect: Some(ConnectionOptions::default()),
+        concurrent_init_limit: Some(1),
+        peer_limit: Some(80),
+        disable_upload: true,
+        disable_local_service_discovery: true,
+        ..SessionOptions::default()
+    };
+    let session = Session::new_with_opts(job_destination, session_options)
         .await
         .map_err(|error| friendly_torrent_error("Could not initialize BitTorrent", &error))?;
     let options = AddTorrentOptions {
@@ -166,10 +213,56 @@ pub(crate) async fn start_torrent_download(
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
+    let _ = session
+        .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
+        .await;
     if let Ok(mut active) = registry.active.lock() {
         active.remove(&task_id);
     }
     result
+}
+
+fn sanitized_network_origins(source: &str) -> Vec<String> {
+    let Ok(parsed) = Url::parse(source) else {
+        return Vec::new();
+    };
+    let candidates = if parsed.scheme() == "magnet" {
+        parsed
+            .query_pairs()
+            .filter_map(|(key, value)| (key == "tr").then_some(value.into_owned()))
+            .filter_map(|value| Url::parse(&value).ok())
+            .collect::<Vec<_>>()
+    } else {
+        vec![parsed]
+    };
+    let mut origins = candidates
+        .into_iter()
+        .filter_map(|tracker| {
+            let host = tracker.host_str()?;
+            let port = tracker
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            Some(format!("{}://{host}{port}", tracker.scheme()))
+        })
+        .take(32)
+        .collect::<Vec<_>>();
+    origins.sort();
+    origins.dedup();
+    origins
+}
+
+fn validate_network_start(settings: &AppSettings, privacy_confirmed: bool) -> Result<(), String> {
+    if !privacy_confirmed {
+        return Err("Confirm the BitTorrent privacy disclosure before starting".into());
+    }
+    if settings.proxy_mode != "disabled" {
+        return Err(
+            "BitTorrent cannot guarantee coverage by the selected HTTP proxy. Switch to Direct connection or cancel the torrent"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -278,7 +371,8 @@ fn bounded_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_torrent_source;
+    use super::{sanitized_network_origins, validate_network_start, validate_torrent_source};
+    use crate::persistence::AppSettings;
 
     #[test]
     fn accepts_magnets_and_remote_torrent_files() {
@@ -293,5 +387,31 @@ mod tests {
     fn rejects_credentials_and_local_files() {
         assert!(validate_torrent_source("https://user:secret@example.test/a.torrent").is_err());
         assert!(validate_torrent_source("file:///private/a.torrent").is_err());
+    }
+
+    #[test]
+    fn requires_consent_and_a_direct_network_policy() {
+        let direct = AppSettings::default();
+        assert!(validate_network_start(&direct, false).is_err());
+        assert!(validate_network_start(&direct, true).is_ok());
+        let proxied = AppSettings {
+            proxy_mode: "system".into(),
+            ..AppSettings::default()
+        };
+        assert!(validate_network_start(&proxied, true).is_err());
+    }
+
+    #[test]
+    fn tracker_previews_never_expose_paths_or_passkeys() {
+        let origins = sanitized_network_origins(
+            "magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862&tr=https%3A%2F%2Ftracker.example%2Fsecret%3Fpasskey%3Dabc",
+        );
+        assert_eq!(origins, ["https://tracker.example"]);
+        assert!(!origins[0].contains("secret"));
+        assert!(!origins[0].contains("abc"));
+        assert_eq!(
+            sanitized_network_origins("https://downloads.example/private/file.torrent?token=abc"),
+            ["https://downloads.example"]
+        );
     }
 }
