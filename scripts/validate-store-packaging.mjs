@@ -140,6 +140,11 @@ assert.ok(
   storeConfigureIndex < storeSettingsIndex,
   "Microsoft Store CLI must be configured before changing authenticated settings",
 );
+assert.match(
+  storeWorkflow,
+  /msstore publish \$packageDirectory `[\s\S]*?--inputFile \$env:PACKAGE_PATH `[\s\S]*?--appId \$env:STORE_PRODUCT_ID/,
+  "Microsoft Store CLI must receive the built MSIX through --inputFile",
+);
 assert.equal(
   topLevelYamlString(snapcraft, "version"),
   desktop.version,
