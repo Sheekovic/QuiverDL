@@ -37,7 +37,10 @@ jobs:
           tag="v$version"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             tagged_commit="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
-            test "$tagged_commit" = "$GITHUB_SHA"
+            if [[ -z "$tagged_commit" || "$tagged_commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::Existing $tag resolves to '${tagged_commit:-<not an annotated tag>}' instead of reviewed commit $GITHUB_SHA."
+              exit 1
+            fi
             echo "$tag already exists at the reviewed release commit."
           else
             test -n "$RELEASE_TOKEN"
@@ -52,7 +55,7 @@ jobs:
         shell: bash
         run: |
           test -n "$GH_TOKEN"
-          pulls="$(gh api "/repos/$GITHUB_REPOSITORY/pulls?state=closed&base=main&per_page=100")"
+          pulls="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls")"
           release_pr="$(jq -er --arg sha "$GITHUB_SHA" '
             [.[] | select(
               .merged_at != null and

@@ -183,7 +183,9 @@ assert.equal(
   1,
   "the reusable release token must exist only in the final push step",
 );
-assert.match(versionTagWorkflow, /test "\$tagged_commit" = "\$GITHUB_SHA"/);
+assert.match(versionTagWorkflow, /"\$tagged_commit" != "\$GITHUB_SHA"/);
+assert.match(versionTagWorkflow, /Existing \$tag resolves to/);
+assert.match(versionTagWorkflow, /commits\/\$GITHUB_SHA\/pulls/);
 assert.match(versionTagWorkflow, /merge_commit_sha == \$sha/);
 assert.match(versionTagWorkflow, /autorelease%3A%20pending/);
 assert.match(versionTagWorkflow, /GH_TOKEN: \$\{\{ secrets\.RELEASE_PLEASE_TOKEN \}\}/);
