@@ -196,9 +196,7 @@ jobs:
           if ($remoteCommit -ne ([string] $env:RELEASE_COMMIT).ToLowerInvariant()) {
             throw 'The release tag moved after package validation; refusing Store submission'
           }
-          $packageDirectory = Split-Path -Parent $env:PACKAGE_PATH
-          msstore publish $packageDirectory `
-            --inputDirectory $packageDirectory `
+          msstore publish "$env:PACKAGE_PATH" `
             --appId $env:STORE_PRODUCT_ID `
             --uploadTimeout 600
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store package submission failed' }
