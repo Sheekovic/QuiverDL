@@ -2,9 +2,14 @@
 
 ## Status
 
-**Evaluated and deferred.** BitTorrent is not approved for implementation in QuiverDL's desktop
-process or HTTP engine. A future proposal may proceed only after satisfying the architecture,
-privacy, parser, filesystem, and test entry gates in this document.
+**Constrained adapter under review.** BitTorrent remains outside the HTTP engine. The current
+desktop adapter requires per-transfer confirmation and Direct connection mode; it disables DHT,
+local discovery, incoming listeners, uploading, and post-completion seeding. It permits tracker
+contact, outbound TCP peers, and peer exchange only after disclosure. Magnet trackers use a bounded
+QuiverDL HTTPS client with pinned public DNS answers and redirects disabled; only filtered public
+peer addresses are handed to librqbit, whose special-use blocklist also covers peer exchange.
+Remote `.torrent` URLs, SOCKS routing, DHT, uTP, incoming connections, port mapping, automatic
+capture, and background seeding remain deferred.
 
 [BEP 3](https://www.bittorrent.org/beps/bep_0003.html) defines v1 metainfo, trackers, piece hashes,
 and a peer protocol in which downloaders also upload. [BEP 52](https://www.bittorrent.org/beps/bep_0052.html)
@@ -78,8 +83,7 @@ peers, or addresses aimed at local services.
   byte counts losslessly across backend, IPC, persistence, and UI layers.
 - For a local `.torrent` file, present the full file tree and exact selected byte total before
   allocation or network discovery.
-- Magnet URIs may be parsed and displayed offline but cannot resolve metadata or enter the transfer
-  queue in the first networked backend. Reject an encoded URI above 16 KiB, more than 128 query
+- Magnet URIs are parsed and displayed offline before the required confirmation. Reject an encoded URI above 16 KiB, more than 128 query
   parameters, a decoded key above 64 bytes, or a decoded value above 4 KiB. Accept at most eight
   exact-topic values, 32 tracker values, and 32 web-seed values; reject malformed percent encoding,
   invalid UTF-8 text fields, and duplicate key/value pairs. Perform checked decoding into bounded
@@ -87,18 +91,16 @@ peers, or addresses aimed at local services.
   magnet URI or full tracker/web-seed values; it shows those endpoints only as sanitized scheme,
   host, and non-default port, with userinfo, path, query, and fragment removed. Because the private
   flag is unavailable before metadata retrieval, DHT, peer exchange, or public tracker discovery
-  could disclose a private torrent too early. Magnet networking requires a later, separate threat
-  model; private magnets remain unsupported until privacy can be established before discovery.
+  could disclose a private torrent too early. The constrained adapter therefore disables DHT and
+  discloses tracker and peer discovery before the user permits metadata resolution.
 - Unselected files must not be materialized except for bounded piece-overlap staging that is clearly
   accounted for and removed safely.
 
 ## Content integrity
 
 V1 torrents use SHA-1 piece hashes. Those hashes detect ordinary corruption but are not publisher
-authentication and do not meet QuiverDL's strong-digest policy. A v1-only input may be parsed by the
-offline inspector but cannot start discovery, allocate content, or download. The first eligible
-networked backend requires v2 or a hybrid torrent with a valid v2 SHA-256 representation; hybrid
-torrents must validate both representations and reject disagreement.
+authentication. The UI and documentation must not present piece verification as proof of publisher
+identity. V2 and hybrid torrents retain their stronger Merkle verification semantics.
 
 Every v2 piece must be verified against its SHA-256 Merkle data before it becomes eligible for
 upload or final assembly. Failed piece bytes are discarded, peers repeatedly supplying bad data are
@@ -174,6 +176,6 @@ Before implementation begins, a proposal must:
 6. Complete dependency, privacy, legal-disclosure, accessibility, and cross-platform security
    review before enabling the backend in production builds.
 
-The first acceptable experiment is an offline, bounded `.torrent` inspector that performs no DNS
-or network activity. A networked client, magnet resolution, DHT, peer exchange, local discovery,
-incoming ports, and automatic browser capture are later and separately reviewed milestones.
+The constrained networked experiment is the direct-only adapter described at the top of this
+document. Additional discovery, routing, listener, and seeding modes are later, separately reviewed
+milestones.

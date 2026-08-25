@@ -21,13 +21,25 @@ use tokio::sync::{Notify, mpsc};
 use url::Url;
 
 mod browser_bridge;
+mod clipboard_monitor;
+mod media;
 mod persistence;
 mod proxy_credentials;
+mod routing;
+mod torrent;
 
 use browser_bridge::{acknowledge_browser_request, get_browser_bridge_info, list_browser_requests};
+use clipboard_monitor::{ClipboardMonitor, set_clipboard_monitor_enabled};
+use media::{
+    MediaRegistry, cancel_media_download, detect_media_url, inspect_media_url, start_media_download,
+};
 use persistence::{AppSettings, PersistentStore, load_app_state, save_app_state};
 use proxy_credentials::{
     clear_proxy_credentials, has_proxy_credentials, load_proxy_password, save_proxy_credentials,
+};
+use routing::{resolve_category_directory, resolve_smart_destination};
+use torrent::{
+    TorrentRegistry, control_torrent_download, inspect_torrent_source, start_torrent_download,
 };
 
 #[tauri::command]
@@ -174,6 +186,7 @@ struct LinkInspection {
     supports_ranges: bool,
     has_validator: bool,
     suggested_filename: String,
+    content_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -219,6 +232,7 @@ async fn inspect_url(url: String, settings: Option<AppSettings>) -> Result<LinkI
         supports_ranges: probe.supports_ranges,
         has_validator: probe.etag.is_some() || probe.last_modified.is_some(),
         suggested_filename: sanitize_filename(probe.suggested_filename.as_deref()),
+        content_type: probe.content_type,
     })
 }
 
@@ -825,11 +839,16 @@ pub fn run() {
             },
         ))
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(TransferRegistry::default())
+        .manage(ClipboardMonitor::default())
+        .manage(MediaRegistry::default())
+        .manage(TorrentRegistry::default())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             app.manage(PersistentStore::new(&app_data_dir));
+            clipboard_monitor::start(app.handle().clone());
             let show = MenuItem::with_id(app, "show", "Show QuiverDL", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -866,9 +885,19 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             inspect_url,
+            inspect_media_url,
+            detect_media_url,
+            resolve_category_directory,
+            resolve_smart_destination,
+            set_clipboard_monitor_enabled,
             register_download,
             discard_registered_download,
             start_download,
+            start_media_download,
+            cancel_media_download,
+            start_torrent_download,
+            control_torrent_download,
+            inspect_torrent_source,
             control_download,
             set_global_speed_limit,
             load_app_state,

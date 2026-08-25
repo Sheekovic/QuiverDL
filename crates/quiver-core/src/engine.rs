@@ -12,8 +12,8 @@ use percent_encoding::percent_decode_str;
 use reqwest::{
     Client, Response, StatusCode,
     header::{
-        ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, IF_RANGE,
-        LAST_MODIFIED, LOCATION, RANGE,
+        ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
+        IF_RANGE, LAST_MODIFIED, LOCATION, RANGE,
     },
 };
 use sha2::{Digest, Sha256};
@@ -41,6 +41,7 @@ pub struct ProbeResult {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub suggested_filename: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -572,6 +573,7 @@ fn probe_result(response: Response) -> Result<ProbeResult> {
             response.headers().get(CONTENT_DISPOSITION),
             response.url(),
         ),
+        content_type: header_string(response.headers().get(CONTENT_TYPE)),
     })
 }
 
@@ -1284,6 +1286,7 @@ mod tests {
             etag: Some("v1".into()),
             last_modified: None,
             suggested_filename: Some("file".into()),
+            content_type: Some("application/octet-stream".into()),
         };
         let state = PartialState {
             url: request.url.to_string(),

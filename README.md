@@ -53,7 +53,26 @@ connection policies, and speed limits. The desktop app persists its queue and se
 recovers interrupted work, provides adaptive themes, English/Arabic direction support, tray and
 notification behavior, supports durable scheduled starts and parallel or sequential FIFO queues,
 supports direct, system, and credential-safe custom proxy routing, and never silently overwrites a
-destination.
+destination. It also provides an opt-in clipboard monitor, customizable MIME/extension routing,
+yt-dlp media metadata and quality selection, and native magnet transfers with validated HTTPS
+trackers. Remote `.torrent` URLs remain deferred until embedded endpoints can be validated before
+network dispatch.
+BitTorrent is an explicit, direct-connection-only action: QuiverDL shows a privacy confirmation
+before starting, rejects System/Custom HTTP proxy modes that cannot cover peer traffic, and disables
+DHT, local discovery, incoming listeners, uploading, and post-completion seeding. Tracker announces
+use a bounded HTTPS-only client with pinned public DNS answers and redirects disabled; only filtered
+public peer addresses are handed to the torrent engine.
+
+Media downloading uses the yt-dlp Python API. Install Python 3 and yt-dlp on the machine running
+QuiverDL; install FFmpeg when merging separate video/audio streams or extracting MP3/M4A audio:
+
+```powershell
+python -m pip install -U yt-dlp
+```
+
+If Python is not on `PATH`, choose its executable in QuiverDL Settings. Clipboard contents are read
+only by the local QuiverDL process while monitoring is enabled; the text never leaves the device
+and is never sent to analytics or another remote service.
 
 Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
 capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
@@ -65,9 +84,9 @@ and privacy boundaries.
 The [queue guide](docs/QUEUES.md) documents scheduling, ordering, restart recovery, and controls.
 The [secure updater design](docs/UPDATER.md) documents signed automatic updates for Linux AppImage
 releases, manual package-manager updates for DEB/RPM, and the remaining rollback/key-rotation gates.
-The [distributed source evaluation](docs/DISTRIBUTED_SOURCES.md) records why bounded HTTP-only
-Metalink support may proceed later while BitTorrent remains behind separate isolation and consent
-gates.
+The [distributed source evaluation](docs/DISTRIBUTED_SOURCES.md) records the threat-model decisions
+behind distributed-source support. BitTorrent transfers remain explicit user actions and never
+start merely because a magnet link appears on the clipboard.
 
 ## Get involved
 

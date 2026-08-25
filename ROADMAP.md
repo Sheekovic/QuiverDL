@@ -30,6 +30,17 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 - [x] Completion notifications and system tray
 - [x] Atomic settings persistence
 - [x] English/Arabic localization foundation with RTL direction support
+- [x] Scrollable settings control-center dialog and unified action toolbar
+- [x] Opt-in clipboard URL detection with local add/dismiss prompts
+- [x] Customizable MIME/extension categories and smart destination routing
+
+## Download sources
+
+- [x] yt-dlp URL detection and Python API metadata extraction
+- [x] Media quality selection, audio extraction, progress hooks, cancellation, and clear errors
+- [x] Consent-gated direct-only magnet transfers with validated HTTPS trackers, pause/resume/cancel, and disabled DHT/listeners/uploads
+- [ ] Safely preflight remote `.torrent` metainfo and every embedded tracker/web-seed before network dispatch
+- [ ] Bundle a maintained Python/yt-dlp runtime per release target to remove the optional system prerequisite
 
 ## Browser integration
 

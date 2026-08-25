@@ -47,8 +47,7 @@ Manual context-menu capture is the default. Automatic interception is opt-in, co
 
 ### Distributed source metadata
 
-Metalink and BitTorrent are not currently accepted inputs. Their evaluation deliberately keeps
-separate trust boundaries, documented in
+Metalink and BitTorrent use separate trust boundaries, documented in
 [DISTRIBUTED_SOURCES.md](DISTRIBUTED_SOURCES.md).
 
 A future Metalink implementation may provide HTTP(S) mirror fallback only after bounded XML
@@ -57,9 +56,10 @@ path containment, and extended redirect/address policies are enforced. Metalink 
 hashes do not authenticate the publisher by themselves. See
 [METALINK_THREAT_MODEL.md](METALINK_THREAT_MODEL.md).
 
-BitTorrent remains deferred because trackers and peers introduce IP and content-identifier
-disclosure, uploading, untrusted peer-wire input, additional TCP/UDP transports, and multi-file
-filesystem risks that the HTTP engine and proxy settings do not cover. See
+The constrained BitTorrent adapter requires per-transfer consent and Direct connection mode. It
+disables DHT, local discovery, incoming listeners, uploading, and seeding after completion; tracker
+and outbound peer traffic can still reveal the user's IP address and swarm identifier. HTTP proxy
+settings are never presented as covering that traffic. See
 [BITTORRENT_THREAT_MODEL.md](BITTORRENT_THREAT_MODEL.md).
 
 ### Updates, dependencies, and release pipeline

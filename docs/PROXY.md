@@ -6,6 +6,10 @@ QuiverDL supports three explicit routing modes in Desktop Settings:
 - **System proxy** lets the HTTP client discover the operating system or environment proxy.
 - **Custom proxy** sends HTTP and HTTPS downloads through one HTTP(S) proxy endpoint.
 
+These modes cover direct HTTP(S) downloads and yt-dlp media requests. BitTorrent peer traffic is a
+different transport: QuiverDL fails closed and will not start a torrent while System or Custom
+proxy mode is selected.
+
 The same route is used for inspection requests, redirects, resume validation, and every parallel
 segment so a download cannot accidentally switch between direct and proxied connections.
 
