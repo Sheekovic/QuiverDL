@@ -2,6 +2,20 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.3.0](https://github.com/Sheekovic/QuiverDL/compare/v0.2.0...v0.3.0) (2026-08-25)
+
+
+### Features
+
+* add unified media, torrent, clipboard, and routing flows ([#36](https://github.com/Sheekovic/QuiverDL/issues/36)) ([37a9079](https://github.com/Sheekovic/QuiverDL/commit/37a9079ba4546d125bb36e38c6eb6f11099c139d))
+
+
+### Bug Fixes
+
+* accept Tauri updater signatures ([#35](https://github.com/Sheekovic/QuiverDL/issues/35)) ([d4ba891](https://github.com/Sheekovic/QuiverDL/commit/d4ba891a0a6a4915e1ee14c2881aa5f75b32db6e))
+* preserve tag context in release recovery ([#34](https://github.com/Sheekovic/QuiverDL/issues/34)) ([0d418e9](https://github.com/Sheekovic/QuiverDL/commit/0d418e9dee154bfae370eae21673ef5269d143e3))
+* unblock automatic release preparation ([#38](https://github.com/Sheekovic/QuiverDL/issues/38)) ([8e2af1d](https://github.com/Sheekovic/QuiverDL/commit/8e2af1deca79f6b73c5f546c2a9403eca7f992fc))
+
 ## [0.2.0](https://github.com/Sheekovic/QuiverDL/compare/v0.1.0...v0.2.0) (2026-08-21)
 
 
