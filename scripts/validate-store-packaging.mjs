@@ -142,7 +142,7 @@ assert.ok(
 );
 assert.match(
   storeWorkflow,
-  /msstore publish \$env:PACKAGE_PATH `[\s\S]*?--appId \$env:STORE_PRODUCT_ID `[\s\S]*?--uploadTimeout 600/,
+  /msstore publish "\$env:PACKAGE_PATH" `[\s\S]*?--appId \$env:STORE_PRODUCT_ID `[\s\S]*?--uploadTimeout 600/,
   "Microsoft Store CLI must receive the validated loose MSIX path and a bounded upload timeout",
 );
 assert.equal(
