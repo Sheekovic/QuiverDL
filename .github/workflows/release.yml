@@ -192,16 +192,14 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --draft --title "QuiverDL $RELEASE_TAG" --notes "Linux packages are available below. Windows is available from Microsoft Store."
           fi
-          shopt -s nullglob
-          debs=(target/release/bundle/deb/*.deb)
-          rpms=(target/release/bundle/rpm/*.rpm)
-          appimages=(target/release/bundle/appimage/*.AppImage)
-          test "${#debs[@]}" -eq 1
-          test "${#rpms[@]}" -eq 1
-          test "${#appimages[@]}" -eq 1
-          bundles=("${debs[0]}" "${rpms[0]}" "${appimages[0]}")
-          appimage="${appimages[0]}"
-          test -f "$appimage.sig"
+          version="${RELEASE_TAG#v}"
+          deb="target/release/bundle/deb/QuiverDL_${version}_amd64.deb"
+          rpm="target/release/bundle/rpm/QuiverDL-${version}-1.x86_64.rpm"
+          appimage="target/release/bundle/appimage/QuiverDL_${version}_amd64.AppImage"
+          bundles=("$deb" "$rpm" "$appimage")
+          for bundle in "${bundles[@]}" "$appimage.sig"; do
+            test -f "$bundle"
+          done
           gh release upload "$RELEASE_TAG" "${bundles[@]}" "$appimage.sig" --clobber
       - name: Attach Linux bundle checksums
         env:
@@ -211,15 +209,16 @@ jobs:
           remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
           test "$remote_commit" = "$RELEASE_COMMIT"
           checksum_file="$RUNNER_TEMP/SHA256SUMS-linux-x64.txt"
-          while IFS= read -r -d '' bundle; do
+          version="${RELEASE_TAG#v}"
+          bundles=(
+            "target/release/bundle/deb/QuiverDL_${version}_amd64.deb"
+            "target/release/bundle/rpm/QuiverDL-${version}-1.x86_64.rpm"
+            "target/release/bundle/appimage/QuiverDL_${version}_amd64.AppImage"
+          )
+          for bundle in "${bundles[@]}"; do
+            test -f "$bundle"
             printf '%s  %s\n' "$(sha256sum "$bundle" | cut -d ' ' -f 1)" "$(basename "$bundle")"
-          done < <(find \
-            target/release/bundle/deb \
-            target/release/bundle/rpm \
-            target/release/bundle/appimage \
-            -maxdepth 1 -type f \
-            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
-            -print0 | sort -z) > "$checksum_file"
+          done > "$checksum_file"
           test -s "$checksum_file"
           gh release upload "$RELEASE_TAG" "$checksum_file" --clobber
       - name: Attach Linux native messaging host archive
@@ -248,17 +247,15 @@ jobs:
         run: |
           remote_commit="$(git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG^{}" | cut -f 1)"
           test "$remote_commit" = "$RELEASE_COMMIT"
-          shopt -s nullglob
-          appimages=(target/release/bundle/appimage/*.AppImage)
-          test "${#appimages[@]}" -eq 1
-          appimage="${appimages[0]}"
+          version="${RELEASE_TAG#v}"
+          appimage="target/release/bundle/appimage/QuiverDL_${version}_amd64.AppImage"
+          test -f "$appimage"
           manifest_script="scripts/generate-update-manifest.mjs"
           if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
             test "$(git -C .release-tools rev-parse HEAD)" = "$WORKFLOW_COMMIT"
             manifest_script=".release-tools/scripts/generate-update-manifest.mjs"
           fi
           manifest="$RUNNER_TEMP/latest.json"
-          version="${RELEASE_TAG#v}"
           GITHUB_REF_NAME="$RELEASE_TAG" node "$manifest_script" \
             --version "$version" \
             --base-url "https://github.com/Sheekovic/QuiverDL/releases/download/$RELEASE_TAG" \
