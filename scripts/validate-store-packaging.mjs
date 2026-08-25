@@ -67,6 +67,10 @@ const msixManifest = await readFile(
   path.join(repository, "packaging", "windows", "msix", "AppxManifest.xml.template"),
   "utf8",
 );
+const storeWorkflow = await readFile(
+  path.join(repository, ".github", "workflows", "store-msix.yml"),
+  "utf8",
+);
 
 assert.equal(chromium.manifest_version, 3);
 assert.equal(firefox.manifest_version, 3);
@@ -128,6 +132,14 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
+const storeConfigureIndex = storeWorkflow.indexOf("msstore reconfigure");
+const storeSettingsIndex = storeWorkflow.indexOf("msstore settings --enableTelemetry false");
+assert.notEqual(storeConfigureIndex, -1, "Microsoft Store workflow must configure the CLI");
+assert.notEqual(storeSettingsIndex, -1, "Microsoft Store workflow must disable CLI telemetry");
+assert.ok(
+  storeConfigureIndex < storeSettingsIndex,
+  "Microsoft Store CLI must be configured before changing authenticated settings",
+);
 assert.equal(
   topLevelYamlString(snapcraft, "version"),
   desktop.version,

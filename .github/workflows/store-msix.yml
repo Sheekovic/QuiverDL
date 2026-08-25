@@ -169,14 +169,14 @@ jobs:
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
         run: |
-          msstore settings --enableTelemetry false
-          if ($LASTEXITCODE -ne 0) { throw 'Could not disable Microsoft Store CLI telemetry' }
           msstore reconfigure `
             --tenantId $env:AZURE_AD_TENANT_ID `
             --sellerId $env:SELLER_ID `
             --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
             --clientSecret $env:AZURE_AD_APPLICATION_SECRET
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store authentication failed' }
+          msstore settings --enableTelemetry false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not disable Microsoft Store CLI telemetry' }
           msstore apps get $env:STORE_PRODUCT_ID
           if ($LASTEXITCODE -ne 0) { throw 'The publisher cannot access the QuiverDL Store product' }
       - name: Submit package to Microsoft certification
