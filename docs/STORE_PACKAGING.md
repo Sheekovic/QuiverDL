@@ -66,7 +66,9 @@ validated package, records and rechecks its SHA-256 digest, and retains both fil
 workflow artifact for 30 days. A version-tag event authenticates with the dedicated Partner Center
 application and submits the package to Microsoft certification automatically. A manual run verifies
 the package, credentials, and product access without changing the Store unless its explicit
-**Publish** input is enabled.
+**Publish** input is enabled. Immediately before either publication path, the workflow fetches the
+remote annotated tag again and refuses submission if it was deleted or no longer resolves to the
+commit that passed preflight.
 
 The publishing job uses the `microsoft-store` GitHub environment and these encrypted secrets:
 

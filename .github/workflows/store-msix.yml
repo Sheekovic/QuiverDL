@@ -183,7 +183,18 @@ jobs:
         shell: pwsh
         env:
           PACKAGE_PATH: ${{ steps.package.outputs.path }}
+          RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
         run: |
+          $remoteTag = git ls-remote --exit-code `
+            "https://github.com/$env:GITHUB_REPOSITORY.git" `
+            "refs/tags/$($env:RELEASE_TAG)^{}"
+          if ($LASTEXITCODE -ne 0 -or -not $remoteTag) {
+            throw 'The annotated release tag no longer exists on GitHub'
+          }
+          $remoteCommit = (($remoteTag -split '\s+')[0]).ToLowerInvariant()
+          if ($remoteCommit -ne ([string] $env:RELEASE_COMMIT).ToLowerInvariant()) {
+            throw 'The release tag moved after package validation; refusing Store submission'
+          }
           msstore publish $env:PACKAGE_PATH --appId $env:STORE_PRODUCT_ID
           if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store package submission failed' }
           msstore submission status $env:STORE_PRODUCT_ID
