@@ -1,6 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   isPermissionGranted,
   requestPermission,
@@ -18,10 +18,30 @@ type LinkInspectionResponse = {
   supportsRanges: boolean;
   hasValidator: boolean;
   suggestedFilename: string;
+  contentType: string | null;
 };
 
 type LinkInspection = LinkInspectionResponse & {
   sourceUrl: string;
+};
+
+type MediaFormat = {
+  formatId: string;
+  label: string;
+  height: number | null;
+  extension: string;
+  audioOnly: boolean;
+  hasAudio: boolean;
+  approxBytes: string | null;
+};
+
+type MediaInspection = {
+  sourceUrl: string;
+  title: string;
+  extractor: string;
+  thumbnail: string | null;
+  durationSeconds: number | null;
+  formats: MediaFormat[];
 };
 
 type EngineStatus = "probing" | "retrying" | "downloading" | "verifying" | "completed";
@@ -31,6 +51,7 @@ type DownloadStatus =
   | "queued"
   | "scheduled"
   | "paused"
+  | "extracting"
   | "cancelling"
   | "cancelled"
   | "failed";
@@ -63,6 +84,15 @@ type DownloadItem = {
   scheduledForMs: string | null;
   queueSequence: string | null;
   completedAtMs: string | null;
+  kind: "direct" | "media" | "torrent";
+  mediaQuality?: string;
+};
+
+type CategoryRule = {
+  name: string;
+  folder: string;
+  extensions: string[];
+  mimePrefixes: string[];
 };
 
 type AppSettings = {
@@ -82,6 +112,11 @@ type AppSettings = {
   proxyUrl: string;
   proxyUsername: string;
   proxyBypass: string;
+  clipboardMonitoring: boolean;
+  smartRouting: boolean;
+  defaultDownloadPath: string;
+  categories: CategoryRule[];
+  mediaPythonPath: string;
 };
 
 type ProxyDraft = Pick<
@@ -113,10 +148,47 @@ type BrowserBridgeInfo = {
   configPath: string;
 };
 
+type ClipboardCandidate = {
+  url: string;
+  kind: DownloadItem["kind"];
+};
+
+type MediaProgress = {
+  status: "downloading" | "verifying" | "extracting";
+  downloadedBytes: string;
+  totalBytes: string | null;
+};
+
+type MediaSummary = {
+  destination: string;
+  bytesWritten: string;
+};
+
+type TorrentInspection = {
+  sourceUrl: string;
+  name: string;
+  sourceType: "magnet" | "torrentFile";
+};
+
+type TorrentProgress = {
+  status: "probing" | "downloading" | "paused" | "failed";
+  downloadedBytes: string;
+  totalBytes: string | null;
+  name: string | null;
+};
+
+type TorrentSummary = {
+  destination: string;
+  bytesWritten: string;
+  name: string;
+};
+
+type SourceMode = "auto" | "media" | "torrent";
+
 type Filter = "all" | "active" | "completed" | "failed";
 type HistorySort = "newest" | "oldest" | "name" | "size";
 
-const APP_STATE_SCHEMA_VERSION = 4;
+const APP_STATE_SCHEMA_VERSION = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const UPDATER_ENABLED = import.meta.env.VITE_QUIVERDL_UPDATER === "true";
@@ -129,6 +201,7 @@ const ACTIVE_STATUSES = new Set<DownloadStatus>([
   "retrying",
   "downloading",
   "paused",
+  "extracting",
   "verifying",
   "cancelling",
 ]);
@@ -141,6 +214,7 @@ const STATUS_LABELS: Record<DownloadStatus, string> = {
   retrying: "Retrying",
   downloading: "Downloading",
   paused: "Paused",
+  extracting: "Extracting audio",
   verifying: "Verifying",
   cancelling: "Cancelling",
   completed: "Completed",
@@ -165,7 +239,53 @@ const DEFAULT_SETTINGS: AppSettings = {
   proxyUrl: "",
   proxyUsername: "",
   proxyBypass: "",
+  clipboardMonitoring: false,
+  smartRouting: true,
+  defaultDownloadPath: "",
+  categories: [
+    { name: "Compressed", folder: "Compressed", extensions: [".zip", ".rar", ".7z", ".tar", ".tar.gz", ".gz", ".bz2", ".xz"], mimePrefixes: ["application/zip", "application/x-rar", "application/x-7z", "application/gzip"] },
+    { name: "Video", folder: "Video", extensions: [".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v"], mimePrefixes: ["video/"] },
+    { name: "Audio", folder: "Audio", extensions: [".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus"], mimePrefixes: ["audio/"] },
+    { name: "Documents", folder: "Documents", extensions: [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".epub"], mimePrefixes: ["application/pdf", "text/"] },
+    { name: "Software", folder: "Software", extensions: [".exe", ".msi", ".msix", ".dmg", ".pkg", ".deb", ".rpm", ".appimage"], mimePrefixes: ["application/x-msdownload", "application/vnd.microsoft.portable-executable"] },
+    { name: "Torrents", folder: "Torrents", extensions: [".torrent"], mimePrefixes: ["application/x-bittorrent"] },
+  ],
+  mediaPythonPath: "",
 };
+
+function matchingCategory(
+  filename: string,
+  contentType: string | null,
+  categories: CategoryRule[],
+) {
+  const lowerName = filename.toLowerCase();
+  const lowerMime = contentType?.split(";", 1)[0].trim().toLowerCase() ?? "";
+  return categories.find((category) =>
+    category.extensions.some((extension) => lowerName.endsWith(extension.toLowerCase()))
+      || category.mimePrefixes.some((prefix) => lowerMime.startsWith(prefix.toLowerCase())),
+  ) ?? null;
+}
+
+function isLikelyMediaUrl(value: string) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    return [
+      "youtube.com",
+      "youtu.be",
+      "vimeo.com",
+      "dailymotion.com",
+      "twitch.tv",
+      "tiktok.com",
+      "instagram.com",
+      "facebook.com",
+      "soundcloud.com",
+      "x.com",
+      "twitter.com",
+    ].some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
 
 function proxyDraftFromSettings(settings: AppSettings): ProxyDraft {
   return {
@@ -296,6 +416,10 @@ function formatScheduledTime(timestamp: string) {
 function App() {
   const [url, setUrl] = useState("");
   const [inspection, setInspection] = useState<LinkInspection | null>(null);
+  const [mediaInspection, setMediaInspection] = useState<MediaInspection | null>(null);
+  const [torrentInspection, setTorrentInspection] = useState<TorrentInspection | null>(null);
+  const [mediaQuality, setMediaQuality] = useState("best");
+  const [sourceMode, setSourceMode] = useState<SourceMode>("auto");
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [historyQuery, setHistoryQuery] = useState("");
@@ -345,6 +469,9 @@ function App() {
   const [updateDownloaded, setUpdateDownloaded] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<number | null>(null);
   const [updateStatus, setUpdateStatus] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [clipboardCandidate, setClipboardCandidate] = useState<ClipboardCandidate | null>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
   const t = (key: MessageKey) => translate(settings.language, key);
 
   useEffect(() => {
@@ -356,6 +483,7 @@ function App() {
         setProxyDraft(proxyDraftFromSettings(snapshot.settings));
         const restored = pruneCompletedHistory(snapshot.downloads.map((item) => ({
           ...item,
+          kind: item.kind ?? "direct",
           downloadedBytes: BigInt(item.downloadedBytes),
           totalBytes: item.totalBytes === null ? null : BigInt(item.totalBytes),
           recoverable: item.status === "paused",
@@ -526,6 +654,37 @@ function App() {
   }, [settings.language, settings.theme]);
 
   useEffect(() => {
+    if (!stateReady) return;
+    void invoke("set_clipboard_monitor_enabled", {
+      enabled: settings.clipboardMonitoring,
+    }).catch((cause) => setError(`Could not update clipboard monitoring: ${String(cause)}`));
+  }, [settings.clipboardMonitoring, stateReady]);
+
+  useEffect(() => {
+    let active = true;
+    let stopListening: (() => void) | undefined;
+    void listen<ClipboardCandidate>("clipboard-download-candidate", (event) => {
+      if (active) setClipboardCandidate(event.payload);
+    }).then((unlisten) => {
+      if (active) stopListening = unlisten;
+      else unlisten();
+    });
+    return () => {
+      active = false;
+      stopListening?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [settingsOpen]);
+
+  useEffect(() => {
     void invoke("set_global_speed_limit", {
       bytesPerSecond: settings.globalSpeedLimitBps,
     }).catch((cause) => setError(String(cause)));
@@ -633,7 +792,42 @@ function App() {
     setInspecting(true);
     setError("");
     setInspection(null);
+    setMediaInspection(null);
+    setTorrentInspection(null);
     try {
+      if (
+        sourceMode === "torrent"
+        || submittedUrl.toLowerCase().startsWith("magnet:")
+        || submittedUrl.toLowerCase().split(/[?#]/, 1)[0].endsWith(".torrent")
+      ) {
+        const result = await invoke<Omit<TorrentInspection, "sourceUrl">>("inspect_torrent_source", {
+          source: submittedUrl,
+        });
+        setTorrentInspection({ ...result, sourceUrl: submittedUrl });
+        return;
+      }
+      let useMedia = sourceMode === "media" || isLikelyMediaUrl(submittedUrl);
+      if (sourceMode === "auto") {
+        if (!useMedia) {
+          try {
+            useMedia = await invoke<boolean>("detect_media_url", {
+              url: submittedUrl,
+              settings,
+            });
+          } catch {
+            useMedia = false;
+          }
+        }
+      }
+      if (useMedia) {
+        const metadata = await invoke<Omit<MediaInspection, "sourceUrl">>("inspect_media_url", {
+          url: submittedUrl,
+          settings,
+        });
+        setMediaInspection({ ...metadata, sourceUrl: submittedUrl });
+        setMediaQuality("best");
+        return;
+      }
       const result = await invoke<LinkInspectionResponse>("inspect_url", {
         url: submittedUrl,
         settings,
@@ -657,10 +851,18 @@ function App() {
     setChoosingDestination(true);
     setError("");
     try {
-      const destination = await save({
-        title: "Save download as",
-        defaultPath: inspection.suggestedFilename || filenameFromUrl(inspection.effectiveUrl),
-      });
+      const filename = inspection.suggestedFilename || filenameFromUrl(inspection.effectiveUrl);
+      const category = matchingCategory(filename, inspection.contentType, settings.categories);
+      const destination = settings.smartRouting && settings.defaultDownloadPath && category
+        ? await invoke<string>("resolve_smart_destination", {
+            defaultPath: settings.defaultDownloadPath,
+            categoryFolder: category.folder,
+            filename,
+          })
+        : await save({
+            title: "Save download as",
+            defaultPath: filename,
+          });
       if (!destination) return;
 
       const sourceUrl = inspection.sourceUrl;
@@ -675,6 +877,126 @@ function App() {
     } finally {
       setChoosingDestination(false);
     }
+  }
+
+  async function chooseTorrentDestination() {
+    if (!torrentInspection) return;
+    setChoosingDestination(true);
+    setError("");
+    try {
+      const category = settings.categories.find((entry) => entry.name === "Torrents");
+      const destination = settings.smartRouting && settings.defaultDownloadPath && category
+        ? await invoke<string>("resolve_category_directory", {
+            defaultPath: settings.defaultDownloadPath,
+            categoryFolder: category.folder,
+          })
+        : await open({
+            title: "Choose a folder for this torrent",
+            directory: true,
+            multiple: false,
+            defaultPath: settings.defaultDownloadPath || undefined,
+          });
+      if (typeof destination !== "string") return;
+      const selected = torrentInspection;
+      setUrl("");
+      setTorrentInspection(null);
+      setSourceMode("auto");
+      void runTorrentDownload(selected.sourceUrl, destination, selected.name);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setChoosingDestination(false);
+    }
+  }
+
+  async function chooseMediaDestination() {
+    if (!mediaInspection) return;
+    setChoosingDestination(true);
+    setError("");
+    try {
+      const categoryName = mediaQuality.startsWith("audio-") ? "Audio" : "Video";
+      const category = settings.categories.find((entry) => entry.name === categoryName);
+      const destination = settings.smartRouting && settings.defaultDownloadPath && category
+        ? await invoke<string>("resolve_category_directory", {
+            defaultPath: settings.defaultDownloadPath,
+            categoryFolder: category.folder,
+          })
+        : await open({
+            title: "Choose a folder for this media download",
+            directory: true,
+            multiple: false,
+            defaultPath: settings.defaultDownloadPath || undefined,
+          });
+      if (typeof destination !== "string") return;
+      const metadata = mediaInspection;
+      setUrl("");
+      setMediaInspection(null);
+      setSourceMode("auto");
+      void runMediaDownload(
+        metadata.sourceUrl,
+        destination,
+        metadata.title,
+        mediaQuality,
+      );
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setChoosingDestination(false);
+    }
+  }
+
+  async function chooseDefaultDownloadFolder() {
+    setError("");
+    try {
+      const selected = await open({
+        title: "Choose the default download folder",
+        directory: true,
+        multiple: false,
+        defaultPath: settings.defaultDownloadPath || undefined,
+      });
+      if (typeof selected === "string") {
+        setSettings((current) => ({ ...current, defaultDownloadPath: selected }));
+      }
+    } catch (cause) {
+      setError(`Could not choose the default download folder: ${String(cause)}`);
+    }
+  }
+
+  function updateCategory(index: number, patch: Partial<CategoryRule>) {
+    setSettings((current) => ({
+      ...current,
+      categories: current.categories.map((category, categoryIndex) =>
+        categoryIndex === index ? { ...category, ...patch } : category,
+      ),
+    }));
+  }
+
+  function addCategory() {
+    setSettings((current) => ({
+      ...current,
+      categories: [
+        ...current.categories,
+        { name: "Custom", folder: "Custom", extensions: [".bin"], mimePrefixes: ["application/octet-stream"] },
+      ],
+    }));
+  }
+
+  function removeCategory(index: number) {
+    setSettings((current) => ({
+      ...current,
+      categories: current.categories.filter((_, categoryIndex) => categoryIndex !== index),
+    }));
+  }
+
+  function acceptClipboardCandidate() {
+    if (!clipboardCandidate) return;
+    setUrl(clipboardCandidate.url);
+    setInspection(null);
+    setMediaInspection(null);
+    setTorrentInspection(null);
+    setSourceMode(clipboardCandidate.kind === "media" ? "media" : clipboardCandidate.kind === "torrent" ? "torrent" : "auto");
+    setClipboardCandidate(null);
+    window.setTimeout(() => urlInputRef.current?.focus(), 0);
   }
 
   async function runDownload(
@@ -708,6 +1030,7 @@ function App() {
       scheduledForMs,
       queueSequence,
       completedAtMs: null,
+      kind: "direct",
     };
     setDownloads((current) =>
       existingId
@@ -884,13 +1207,219 @@ function App() {
     }
   }
 
+  async function runMediaDownload(
+    sourceUrl: string,
+    destinationDirectory: string,
+    title: string,
+    quality: string,
+    existingId?: string,
+  ) {
+    await recoveryGate.current?.promise;
+    const executionSettings = latestSettings.current;
+    const item: DownloadItem = {
+      id: existingId ?? createTaskId(),
+      name: title,
+      url: sourceUrl,
+      destination: destinationDirectory,
+      status: "starting",
+      downloadedBytes: 0n,
+      totalBytes: null,
+      recoverable: false,
+      queuedAtMs: Date.now().toString(),
+      scheduledForMs: null,
+      queueSequence: null,
+      completedAtMs: null,
+      kind: "media",
+      mediaQuality: quality,
+    };
+    setDownloads((current) => existingId
+      ? current.map((entry) => entry.id === existingId ? item : entry)
+      : [item, ...current]);
+    setFilter("all");
+    const { recoverable: _recoverable, ...storedItem } = item;
+    const serialized: StoredDownload = {
+      ...storedItem,
+      downloadedBytes: "0",
+      totalBytes: null,
+    };
+    const currentSnapshot = latestSnapshot.current ?? {
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
+      settings: executionSettings,
+      downloads: [],
+    };
+    try {
+      await persistSnapshotNow({
+        schemaVersion: APP_STATE_SCHEMA_VERSION,
+        settings: executionSettings,
+        downloads: currentSnapshot.downloads.some((entry) => entry.id === item.id)
+          ? currentSnapshot.downloads.map((entry) => entry.id === item.id ? serialized : entry)
+          : [serialized, ...currentSnapshot.downloads],
+      });
+    } catch (cause) {
+      updateDownload(item.id, { status: "failed", error: `Could not durably queue the media download: ${String(cause)}` });
+      return;
+    }
+    void executeMediaDownload(item, executionSettings);
+  }
+
+  async function executeMediaDownload(item: DownloadItem, executionSettings: AppSettings) {
+    updateDownload(item.id, { status: "starting", error: undefined, recoverable: false });
+    const onEvent = new Channel<MediaProgress>();
+    onEvent.onmessage = (message) => {
+      updateDownload(item.id, (current) => ({
+        status: current.status === "cancelling" || current.status === "cancelled"
+          ? current.status
+          : message.status,
+        downloadedBytes: BigInt(message.downloadedBytes),
+        totalBytes: message.totalBytes === null ? current.totalBytes : BigInt(message.totalBytes),
+      }));
+    };
+    try {
+      const summary = await invoke<MediaSummary>("start_media_download", {
+        request: {
+          taskId: item.id,
+          url: item.url,
+          destinationDirectory: item.destination,
+          quality: item.mediaQuality ?? "best",
+          settings: executionSettings,
+        },
+        onEvent,
+      });
+      const bytesWritten = BigInt(summary.bytesWritten);
+      updateDownload(item.id, {
+        status: "completed",
+        destination: summary.destination,
+        name: destinationName(summary.destination),
+        downloadedBytes: bytesWritten,
+        totalBytes: bytesWritten,
+        completedAtMs: Date.now().toString(),
+      });
+      if (executionSettings.notifications) void notifyCompleted(destinationName(summary.destination));
+    } catch (cause) {
+      const failure = String(cause);
+      updateDownload(item.id, (current) => {
+        const cancelled = current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
+        return { status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : failure };
+      });
+    }
+  }
+
+  async function runTorrentDownload(
+    sourceUrl: string,
+    destinationDirectory: string,
+    title: string,
+    existingId?: string,
+  ) {
+    await recoveryGate.current?.promise;
+    const executionSettings = latestSettings.current;
+    const item: DownloadItem = {
+      id: existingId ?? createTaskId(),
+      name: title,
+      url: sourceUrl,
+      destination: destinationDirectory,
+      status: "starting",
+      downloadedBytes: 0n,
+      totalBytes: null,
+      recoverable: false,
+      queuedAtMs: Date.now().toString(),
+      scheduledForMs: null,
+      queueSequence: null,
+      completedAtMs: null,
+      kind: "torrent",
+    };
+    setDownloads((current) => existingId
+      ? current.map((entry) => entry.id === existingId ? item : entry)
+      : [item, ...current]);
+    setFilter("all");
+    const { recoverable: _recoverable, ...storedItem } = item;
+    const serialized: StoredDownload = {
+      ...storedItem,
+      downloadedBytes: "0",
+      totalBytes: null,
+    };
+    const currentSnapshot = latestSnapshot.current ?? {
+      schemaVersion: APP_STATE_SCHEMA_VERSION,
+      settings: executionSettings,
+      downloads: [],
+    };
+    try {
+      await persistSnapshotNow({
+        schemaVersion: APP_STATE_SCHEMA_VERSION,
+        settings: executionSettings,
+        downloads: currentSnapshot.downloads.some((entry) => entry.id === item.id)
+          ? currentSnapshot.downloads.map((entry) => entry.id === item.id ? serialized : entry)
+          : [serialized, ...currentSnapshot.downloads],
+      });
+    } catch (cause) {
+      updateDownload(item.id, { status: "failed", error: `Could not durably queue the torrent: ${String(cause)}` });
+      return;
+    }
+    void executeTorrentDownload(item);
+  }
+
+  async function executeTorrentDownload(item: DownloadItem) {
+    updateDownload(item.id, { status: "starting", error: undefined, recoverable: false });
+    const onEvent = new Channel<TorrentProgress>();
+    onEvent.onmessage = (message) => {
+      updateDownload(item.id, (current) => ({
+        status: current.status === "cancelling" || current.status === "cancelled"
+          ? current.status
+          : message.status,
+        name: message.name ?? current.name,
+        downloadedBytes: BigInt(message.downloadedBytes),
+        totalBytes: message.totalBytes === null ? current.totalBytes : BigInt(message.totalBytes),
+      }));
+    };
+    try {
+      const summary = await invoke<TorrentSummary>("start_torrent_download", {
+        taskId: item.id,
+        source: item.url,
+        destinationDirectory: item.destination,
+        onEvent,
+      });
+      const bytesWritten = BigInt(summary.bytesWritten);
+      updateDownload(item.id, {
+        status: "completed",
+        destination: summary.destination,
+        name: summary.name,
+        downloadedBytes: bytesWritten,
+        totalBytes: bytesWritten,
+        completedAtMs: Date.now().toString(),
+      });
+      if (latestSettings.current.notifications) void notifyCompleted(summary.name);
+    } catch (cause) {
+      const failure = String(cause);
+      updateDownload(item.id, (current) => {
+        const cancelled = current.status === "cancelling" || failure.toLowerCase().includes("cancelled");
+        return { status: cancelled ? "cancelled" : "failed", error: cancelled ? undefined : failure };
+      });
+    }
+  }
+
   function retryDownload(item: DownloadItem) {
+    if (item.kind === "media") {
+      void runMediaDownload(
+        item.url,
+        item.destination,
+        item.name,
+        item.mediaQuality ?? "best",
+        item.id,
+      );
+      return;
+    }
+    if (item.kind === "torrent") {
+      void runTorrentDownload(item.url, item.destination, item.name, item.id);
+      return;
+    }
     void runDownload(item.url, item.destination, item.id, undefined, null);
   }
 
   function reviewBrowserRequest(request: BrowserRequest) {
     setUrl(request.url);
     setInspection(null);
+    setMediaInspection(null);
+    setTorrentInspection(null);
+    setSourceMode("auto");
     setFilter("all");
     setReviewingBrowserRequest(request);
   }
@@ -951,6 +1480,27 @@ function App() {
 
   async function controlDownload(item: DownloadItem, action: "pause" | "resume" | "cancel") {
     setError("");
+    if (item.kind === "media") {
+      if (action !== "cancel") return;
+      updateDownload(item.id, { status: "cancelling", error: undefined });
+      try {
+        await invoke("cancel_media_download", { taskId: item.id });
+      } catch (cause) {
+        setError(String(cause));
+      }
+      return;
+    }
+    if (item.kind === "torrent") {
+      try {
+        await invoke("control_torrent_download", { taskId: item.id, action });
+        updateDownload(item.id, {
+          status: action === "pause" ? "paused" : action === "resume" ? "downloading" : "cancelling",
+        });
+      } catch (cause) {
+        setError(String(cause));
+      }
+      return;
+    }
     if (action === "cancel" && !registeredDownloads.current.has(item.id)) {
       pendingCancellations.current.add(item.id);
       updateDownload(item.id, { status: "cancelling", error: undefined });
@@ -1119,8 +1669,23 @@ function App() {
           {t("privateDesign")}
           <small>{t("noTelemetry")}</small>
         </div>
-        <details className="settings-panel">
-          <summary>{t("settings")}</summary>
+        <button className="sidebar-settings-button" type="button" onClick={() => setSettingsOpen(true)}>
+          <span aria-hidden="true">⚙</span>
+          {t("settings")}
+        </button>
+        {settingsOpen && (
+          <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSettingsOpen(false);
+          }}>
+            <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+              <div className="settings-modal-header">
+                <div>
+                  <p className="eyebrow">QUIVERDL CONTROL CENTER</p>
+                  <h2 id="settings-title">{t("settings")}</h2>
+                </div>
+                <button type="button" aria-label="Close settings" autoFocus onClick={() => setSettingsOpen(false)}>×</button>
+              </div>
+              <div className="settings-panel settings-modal-body">
           <label>
             {t("theme")}
             <select value={settings.theme} onChange={(event) => setSettings((current) => ({ ...current, theme: event.target.value as AppSettings["theme"] }))}>
@@ -1197,6 +1762,91 @@ function App() {
             </select>
           </label>
           <small className="queue-help">{t("historyRetentionHint")}</small>
+          <fieldset className="settings-group">
+            <legend>Capture & routing</legend>
+            <label className="checkbox-setting">
+              <input
+                type="checkbox"
+                checked={settings.clipboardMonitoring}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  clipboardMonitoring: event.target.checked,
+                }))}
+              />
+              Monitor copied download links
+            </label>
+            <small className="queue-help">Only URL-shaped clipboard text is inspected. Clipboard contents never leave this device.</small>
+            <label className="checkbox-setting">
+              <input
+                type="checkbox"
+                checked={settings.smartRouting}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  smartRouting: event.target.checked,
+                }))}
+              />
+              Sort downloads into category folders
+            </label>
+            <label>
+              Default download folder
+              <div className="path-picker-row">
+                <input type="text" value={settings.defaultDownloadPath} readOnly placeholder="Choose a folder" />
+                <button type="button" onClick={() => void chooseDefaultDownloadFolder()}>Browse</button>
+              </div>
+            </label>
+            <div className="category-editor">
+              <div className="category-heading">
+                <strong>Smart categories</strong>
+                <button type="button" onClick={addCategory} disabled={settings.categories.length >= 32}>Add category</button>
+              </div>
+              {settings.categories.map((category, index) => (
+                <div className="category-card" key={`${index}-${category.name}`}>
+                  <label>
+                    Name
+                    <input value={category.name} onChange={(event) => updateCategory(index, { name: event.target.value })} />
+                  </label>
+                  <label>
+                    Folder
+                    <input value={category.folder} onChange={(event) => updateCategory(index, { folder: event.target.value })} />
+                  </label>
+                  <label className="category-wide">
+                    Extensions (comma separated)
+                    <input
+                      value={category.extensions.join(", ")}
+                      onChange={(event) => updateCategory(index, {
+                        extensions: event.target.value.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean),
+                      })}
+                    />
+                  </label>
+                  <label className="category-wide">
+                    MIME prefixes (comma separated)
+                    <input
+                      value={category.mimePrefixes.join(", ")}
+                      onChange={(event) => updateCategory(index, {
+                        mimePrefixes: event.target.value.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean),
+                      })}
+                    />
+                  </label>
+                  {settings.categories.length > 1 && (
+                    <button className="remove-category" type="button" onClick={() => removeCategory(index)}>Remove</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="settings-group">
+            <legend>Media engine</legend>
+            <label>
+              Python executable (optional)
+              <input
+                type="text"
+                value={settings.mediaPythonPath}
+                placeholder="Auto-detect python3 / python / py"
+                onChange={(event) => setSettings((current) => ({ ...current, mediaPythonPath: event.target.value }))}
+              />
+            </label>
+            <small className="credential-status">Media downloads use the yt-dlp Python API. Install with <code>python -m pip install -U yt-dlp</code>; FFmpeg is required for merged video and audio conversion.</small>
+          </fieldset>
           <fieldset className="proxy-settings">
             <legend>Proxy</legend>
             <label>
@@ -1340,7 +1990,10 @@ function App() {
               <small title={bridgeInfo.configPath}>Keep this token private.</small>
             </div>
           )}
-        </details>
+              </div>
+            </section>
+          </div>
+        )}
       </aside>
 
       <main className="workspace">
@@ -1351,6 +2004,23 @@ function App() {
           </div>
           <span className="engine-badge"><i /> Engine ready</span>
         </header>
+        <div className="action-toolbar" role="toolbar" aria-label="Download actions">
+          <button className="toolbar-primary" type="button" onClick={() => { setSourceMode("auto"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>+ Add URL</button>
+          <button type="button" aria-pressed={sourceMode === "media"} onClick={() => { setSourceMode("media"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>Media</button>
+          <button type="button" aria-pressed={sourceMode === "torrent"} onClick={() => { setSourceMode("torrent"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>Torrent / Magnet</button>
+          <button
+            type="button"
+            aria-pressed={settings.clipboardMonitoring}
+            onClick={() => setSettings((current) => ({
+              ...current,
+              clipboardMonitoring: !current.clipboardMonitoring,
+            }))}
+          >
+            Clipboard {settings.clipboardMonitoring ? "on" : "off"}
+          </button>
+          <button type="button" onClick={() => setFilter("completed")}>History</button>
+          <button type="button" onClick={() => setSettingsOpen(true)}>Settings</button>
+        </div>
 
         {UPDATER_ENABLED && availableUpdateVersion && (
           <section className="update-banner" aria-live="polite">
@@ -1386,14 +2056,18 @@ function App() {
             <div className="url-row">
               <input
                 id="download-url"
-                type="url"
+                ref={urlInputRef}
+                type="text"
+                inputMode="url"
                 value={url}
                 onChange={(event) => {
                   setUrl(event.currentTarget.value);
                   setInspection(null);
+                  setMediaInspection(null);
+                  setTorrentInspection(null);
                   setReviewingBrowserRequest(null);
                 }}
-                placeholder="https://example.com/archive.zip"
+                placeholder={sourceMode === "media" ? "Paste a video or media page URL" : sourceMode === "torrent" ? "Paste a magnet or .torrent URL" : "https://example.com/archive.zip"}
                 autoComplete="off"
                 disabled={inspecting}
                 required
@@ -1432,6 +2106,58 @@ function App() {
               </button>
             </div>
           )}
+          {mediaInspection && (
+            <div className="inspection-card media-inspection">
+              {mediaInspection.thumbnail && (
+                <img src={mediaInspection.thumbnail} alt="" referrerPolicy="no-referrer" />
+              )}
+              <div className="inspection-details">
+                <span className="source-kind">Media via {mediaInspection.extractor}</span>
+                <h3>{mediaInspection.title}</h3>
+                <p>
+                  {mediaInspection.durationSeconds === null
+                    ? "Duration unavailable"
+                    : `${Math.floor(mediaInspection.durationSeconds / 60)}:${String(mediaInspection.durationSeconds % 60).padStart(2, "0")}`}
+                </p>
+                <label className="media-quality">
+                  Quality and format
+                  <select value={mediaQuality} onChange={(event) => setMediaQuality(event.currentTarget.value)}>
+                    <option value="best">Best available video</option>
+                    <option value="2160">Up to 2160p</option>
+                    <option value="1440">Up to 1440p</option>
+                    <option value="1080">Up to 1080p</option>
+                    <option value="720">Up to 720p</option>
+                    <option value="480">Up to 480p</option>
+                    <option value="360">Up to 360p</option>
+                    <option value="audio-mp3">Audio only - MP3</option>
+                    <option value="audio-m4a">Audio only - M4A</option>
+                    {mediaInspection.formats.map((format) => (
+                      <option key={`${format.formatId}-${format.extension}`} value={`format:${format.formatId}`}>
+                        {format.label} ({format.extension}){format.approxBytes ? ` - ${formatBytes(BigInt(format.approxBytes))}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {mediaQuality.startsWith("audio-") && <small>Audio conversion requires FFmpeg.</small>}
+                </label>
+              </div>
+              <button className="primary save-button" type="button" onClick={chooseMediaDestination} disabled={choosingDestination}>
+                {choosingDestination ? t("opening") : "Choose folder and download"}
+              </button>
+            </div>
+          )}
+          {torrentInspection && (
+            <div className="inspection-card torrent-inspection">
+              <div className="torrent-mark" aria-hidden="true">P2P</div>
+              <div className="inspection-details">
+                <span className="source-kind">{torrentInspection.sourceType === "magnet" ? "Magnet link" : "Remote .torrent file"}</span>
+                <h3>{torrentInspection.name}</h3>
+                <p>QuiverDL will discover peers and verify every BitTorrent piece before completion.</p>
+              </div>
+              <button className="primary save-button" type="button" onClick={chooseTorrentDestination} disabled={choosingDestination}>
+                {choosingDestination ? t("opening") : "Choose folder and download"}
+              </button>
+            </div>
+          )}
         </section>
 
         {browserRequests.length > 0 && (
@@ -1446,6 +2172,17 @@ function App() {
               </button>
             ))}
           </section>
+        )}
+
+        {clipboardCandidate && (
+          <aside className="clipboard-toast" role="status" aria-live="polite">
+            <div>
+              <strong>Download link copied</strong>
+              <span>{clipboardCandidate.kind === "media" ? "Media" : clipboardCandidate.kind === "torrent" ? "Torrent" : "File"} link detected</span>
+            </div>
+            <button className="primary" type="button" onClick={acceptClipboardCandidate}>Add</button>
+            <button type="button" onClick={() => setClipboardCandidate(null)}>Dismiss</button>
+          </aside>
         )}
 
         <section className="downloads-panel" aria-live="polite">
@@ -1556,7 +2293,7 @@ function DownloadRow({ item, onControl, onRemove, onRetry, completedLabel, remov
     ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
   const isActive = ACTIVE_STATUSES.has(item.status);
-  const canPause = ["probing", "downloading"].includes(item.status);
+  const canPause = item.kind !== "media" && ["probing", "downloading"].includes(item.status);
   const canCancel = isActive && item.status !== "cancelling";
   const hostname = (() => {
     try { return new URL(item.url).hostname; } catch { return "download"; }
@@ -1564,7 +2301,9 @@ function DownloadRow({ item, onControl, onRemove, onRetry, completedLabel, remov
 
   return (
     <article className={`download-row status-${item.status}`}>
-      <div className="file-badge" aria-hidden="true">FILE</div>
+      <div className={`file-badge kind-${item.kind}`} aria-hidden="true">
+        {item.kind === "media" ? "MEDIA" : item.kind === "torrent" ? "P2P" : "FILE"}
+      </div>
       <div className="download-content">
         <div className="download-title">
           <div>

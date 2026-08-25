@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use tokio::{
 };
 use url::Url;
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const MAX_DOWNLOADS: usize = 10_000;
 const MAX_STATE_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -48,6 +48,64 @@ pub(crate) struct AppSettings {
     pub proxy_url: String,
     pub proxy_username: String,
     pub proxy_bypass: String,
+    pub clipboard_monitoring: bool,
+    pub smart_routing: bool,
+    pub default_download_path: String,
+    pub categories: Vec<CategoryRule>,
+    pub media_python_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CategoryRule {
+    pub name: String,
+    pub folder: String,
+    pub extensions: Vec<String>,
+    pub mime_prefixes: Vec<String>,
+}
+
+fn default_categories() -> Vec<CategoryRule> {
+    [
+        (
+            "Compressed",
+            "Compressed",
+            ".zip,.rar,.7z,.tar,.tar.gz,.gz,.bz2,.xz",
+            "application/zip,application/x-rar,application/x-7z,application/gzip",
+        ),
+        ("Video", "Video", ".mp4,.mkv,.avi,.mov,.webm,.m4v", "video/"),
+        (
+            "Audio",
+            "Audio",
+            ".mp3,.wav,.flac,.m4a,.aac,.ogg,.opus",
+            "audio/",
+        ),
+        (
+            "Documents",
+            "Documents",
+            ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.epub",
+            "application/pdf,text/",
+        ),
+        (
+            "Software",
+            "Software",
+            ".exe,.msi,.msix,.dmg,.pkg,.deb,.rpm,.appimage",
+            "application/x-msdownload,application/vnd.microsoft.portable-executable",
+        ),
+        (
+            "Torrents",
+            "Torrents",
+            ".torrent",
+            "application/x-bittorrent",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, folder, extensions, mime_prefixes)| CategoryRule {
+        name: name.into(),
+        folder: folder.into(),
+        extensions: extensions.split(',').map(str::to_owned).collect(),
+        mime_prefixes: mime_prefixes.split(',').map(str::to_owned).collect(),
+    })
+    .collect()
 }
 
 impl Default for AppSettings {
@@ -69,6 +127,11 @@ impl Default for AppSettings {
             proxy_url: String::new(),
             proxy_username: String::new(),
             proxy_bypass: String::new(),
+            clipboard_monitoring: false,
+            smart_routing: true,
+            default_download_path: String::new(),
+            categories: default_categories(),
+            media_python_path: String::new(),
         }
     }
 }
@@ -145,6 +208,69 @@ impl AppSettings {
                 return Err("Speed limits must be between 1 KiB/s and 1 TiB/s".into());
             }
         }
+        if self.default_download_path.chars().count() > 4_096
+            || self.default_download_path.chars().any(char::is_control)
+            || (!self.default_download_path.is_empty()
+                && !Path::new(&self.default_download_path).is_absolute())
+        {
+            return Err("The default download folder must be an absolute local path".into());
+        }
+        if self.media_python_path.chars().count() > 4_096
+            || self.media_python_path.chars().any(char::is_control)
+        {
+            return Err("The media Python path is invalid".into());
+        }
+        if self.categories.is_empty() || self.categories.len() > 32 {
+            return Err("Configure between 1 and 32 download categories".into());
+        }
+        let mut category_names = HashSet::new();
+        for category in &self.categories {
+            let name = category.name.trim();
+            if name.is_empty()
+                || name.chars().count() > 64
+                || name.chars().any(char::is_control)
+                || !category_names.insert(name.to_lowercase())
+            {
+                return Err("Category names must be unique and between 1 and 64 characters".into());
+            }
+            let folder = Path::new(category.folder.trim());
+            if category.folder.is_empty()
+                || category.folder.chars().count() > 240
+                || category.folder.chars().any(char::is_control)
+                || folder.is_absolute()
+                || folder.components().any(|component| {
+                    matches!(
+                        component,
+                        Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                    )
+                })
+            {
+                return Err("Category folders must stay inside the default download folder".into());
+            }
+            if category.extensions.len() > 128 || category.mime_prefixes.len() > 64 {
+                return Err("A category contains too many matching rules".into());
+            }
+            for extension in &category.extensions {
+                if extension.len() < 2
+                    || extension.len() > 24
+                    || !extension.starts_with('.')
+                    || !extension[1..].split('.').all(|part| {
+                        !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    })
+                {
+                    return Err("Category extensions must look like .zip or .tar.gz".into());
+                }
+            }
+            for prefix in &category.mime_prefixes {
+                if prefix.is_empty()
+                    || prefix.len() > 128
+                    || prefix.chars().any(char::is_control)
+                    || !prefix.contains('/')
+                {
+                    return Err("A category contains an invalid MIME prefix".into());
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -170,13 +296,31 @@ pub(crate) struct StoredDownload {
     pub queue_sequence: Option<String>,
     #[serde(default)]
     pub completed_at_ms: Option<String>,
+    #[serde(default = "default_download_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub media_quality: Option<String>,
+}
+
+fn default_download_kind() -> String {
+    "direct".into()
 }
 
 impl StoredDownload {
     fn validate(&self) -> Result<(), String> {
         super::validate_task_id(&self.id)?;
         let url = Url::parse(&self.url).map_err(|_| "A saved download has an invalid URL")?;
-        if !matches!(url.scheme(), "http" | "https") {
+        if !matches!(self.kind.as_str(), "direct" | "media" | "torrent") {
+            return Err("A saved download has an unsupported source type".into());
+        }
+        if self.media_quality.as_ref().is_some_and(|quality| {
+            quality.is_empty() || quality.len() > 135 || quality.chars().any(char::is_control)
+        }) {
+            return Err("A saved media quality is invalid".into());
+        }
+        if !matches!(url.scheme(), "http" | "https" | "magnet")
+            || (self.kind != "torrent" && url.scheme() == "magnet")
+        {
             return Err("A saved download uses an unsupported URL scheme".into());
         }
         super::validate_destination(&self.destination)?;
@@ -197,6 +341,7 @@ impl StoredDownload {
                     | "paused"
                     | "verifying"
                     | "cancelling"
+                    | "extracting"
                     | "completed"
                     | "cancelled"
                     | "failed"
@@ -331,7 +476,13 @@ pub(crate) async fn load_app_state(
     for download in &mut snapshot.downloads {
         if matches!(
             download.status.as_str(),
-            "starting" | "probing" | "retrying" | "downloading" | "verifying" | "cancelling"
+            "starting"
+                | "probing"
+                | "retrying"
+                | "downloading"
+                | "verifying"
+                | "extracting"
+                | "cancelling"
         ) {
             download.status = "paused".into();
             download.error =
@@ -598,6 +749,8 @@ mod tests {
             scheduled_for_ms: None,
             queue_sequence: None,
             completed_at_ms: None,
+            kind: "direct".into(),
+            media_quality: None,
         };
 
         download.validate().expect("multibyte name should be valid");
@@ -628,13 +781,15 @@ mod tests {
                 scheduled_for_ms: None,
                 queue_sequence: None,
                 completed_at_ms: None,
+                kind: "direct".into(),
+                media_quality: None,
             }],
         };
 
         snapshot
             .validate()
             .expect("version two queue should migrate");
-        assert_eq!(snapshot.schema_version, 4);
+        assert_eq!(snapshot.schema_version, 5);
         assert_eq!(snapshot.downloads[0].queue_sequence.as_deref(), Some("0"));
     }
 
@@ -667,7 +822,7 @@ mod tests {
         snapshot
             .validate()
             .expect("version three history should migrate");
-        assert_eq!(snapshot.schema_version, 4);
+        assert_eq!(snapshot.schema_version, 5);
         assert_eq!(snapshot.downloads[0].completed_at_ms, None);
     }
 
@@ -706,6 +861,8 @@ mod tests {
             scheduled_for_ms: None,
             queue_sequence: Some("0".into()),
             completed_at_ms: Some("1770003600000".into()),
+            kind: "direct".into(),
+            media_quality: None,
         };
         completed
             .validate()
@@ -742,6 +899,8 @@ mod tests {
             scheduled_for_ms: Some("1770003600000".into()),
             queue_sequence: Some("42".into()),
             completed_at_ms: None,
+            kind: "direct".into(),
+            media_quality: None,
         };
 
         scheduled

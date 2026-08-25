@@ -24,13 +24,16 @@
       "capabilities": [
         "default"
       ],
-      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
-      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'",
+      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "python/quiver_media.py"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

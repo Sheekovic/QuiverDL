@@ -1,6 +1,8 @@
 /target/
 **/node_modules/
 **/dist/
+**/__pycache__/
+*.py[cod]
 *.quiver-part
 *.quiver.json
 .idea/
