@@ -91,7 +91,7 @@ fn downloadable_candidate(value: &str) -> Option<ClipboardCandidate> {
             kind: "torrent",
         });
     }
-    if !matches!(url.scheme(), "http" | "https" | "ftp") || url.host().is_none() {
+    if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
         return None;
     }
 
@@ -170,6 +170,7 @@ mod tests {
             Some("torrent")
         );
         assert!(downloadable_candidate("https://user:secret@example.test/file.zip").is_none());
+        assert!(downloadable_candidate("ftp://example.test/file.zip").is_none());
         assert!(downloadable_candidate("copied text").is_none());
     }
 }

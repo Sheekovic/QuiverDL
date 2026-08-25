@@ -64,7 +64,8 @@ python -m pip install -U yt-dlp
 ```
 
 If Python is not on `PATH`, choose its executable in QuiverDL Settings. Clipboard contents are read
-only while clipboard monitoring is enabled and are never sent to QuiverDL or third-party analytics.
+only by the local QuiverDL process while monitoring is enabled; the text never leaves the device
+and is never sent to analytics or another remote service.
 
 Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
 capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
