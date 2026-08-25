@@ -159,6 +159,17 @@ assert.equal(
   2,
   "release caches must exclude stale Tauri bundle outputs",
 );
+assert.match(releaseWorkflow, /debs=\(target\/release\/bundle\/deb\/\*\.deb\)/);
+assert.match(releaseWorkflow, /rpms=\(target\/release\/bundle\/rpm\/\*\.rpm\)/);
+assert.match(
+  releaseWorkflow,
+  /appimages=\(target\/release\/bundle\/appimage\/\*\.AppImage\)/,
+);
+assert.doesNotMatch(
+  releaseWorkflow,
+  /find \. -type f -path '\*\/release\/bundle\/\*'/,
+  "release uploads must use the validated workspace bundle directories",
+);
 assert.match(releasePleaseWorkflow, /scripts\/sync-release-lockfile\.mjs/);
 assert.doesNotMatch(
   releasePleaseWorkflow,

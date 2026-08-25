@@ -192,9 +192,15 @@ jobs:
           else
             gh release create "$RELEASE_TAG" --draft --title "QuiverDL $RELEASE_TAG" --notes "Linux packages are available below. Windows is available from Microsoft Store."
           fi
-          mapfile -d '' bundles < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z)
-          test "${#bundles[@]}" -eq 3
-          appimage="$(printf '%s\n' "${bundles[@]}" | grep '\.AppImage$')"
+          shopt -s nullglob
+          debs=(target/release/bundle/deb/*.deb)
+          rpms=(target/release/bundle/rpm/*.rpm)
+          appimages=(target/release/bundle/appimage/*.AppImage)
+          test "${#debs[@]}" -eq 1
+          test "${#rpms[@]}" -eq 1
+          test "${#appimages[@]}" -eq 1
+          bundles=("${debs[0]}" "${rpms[0]}" "${appimages[0]}")
+          appimage="${appimages[0]}"
           test -f "$appimage.sig"
           gh release upload "$RELEASE_TAG" "${bundles[@]}" "$appimage.sig" --clobber
       - name: Attach Linux bundle checksums
@@ -207,7 +213,13 @@ jobs:
           checksum_file="$RUNNER_TEMP/SHA256SUMS-linux-x64.txt"
           while IFS= read -r -d '' bundle; do
             printf '%s  %s\n' "$(sha256sum "$bundle" | cut -d ' ' -f 1)" "$(basename "$bundle")"
-          done < <(find . -type f -path '*/release/bundle/*' \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -print0 | sort -z) > "$checksum_file"
+          done < <(find \
+            target/release/bundle/deb \
+            target/release/bundle/rpm \
+            target/release/bundle/appimage \
+            -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            -print0 | sort -z) > "$checksum_file"
           test -s "$checksum_file"
           gh release upload "$RELEASE_TAG" "$checksum_file" --clobber
       - name: Attach Linux native messaging host archive
