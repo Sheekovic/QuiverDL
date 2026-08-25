@@ -68,6 +68,12 @@ const releasePleaseWorkflow = await readFile(path.join(
   "workflows",
   "release-please.yml",
 ), "utf8");
+const versionTagWorkflow = await readFile(path.join(
+  repository,
+  ".github",
+  "workflows",
+  "version-tag.yml",
+), "utf8");
 assert.equal((template.match(/__TAURI_UPDATER_PUBLIC_KEY__/g) ?? []).length, 1);
 const parsed = JSON.parse(template.replace("__TAURI_UPDATER_PUBLIC_KEY__", "TEST-PUBLIC-KEY"));
 assert.equal(parsed.bundle.createUpdaterArtifacts, true);
@@ -177,4 +183,8 @@ assert.equal(
   1,
   "the reusable release token must exist only in the final push step",
 );
+assert.match(versionTagWorkflow, /test "\$tagged_commit" = "\$GITHUB_SHA"/);
+assert.match(versionTagWorkflow, /merge_commit_sha == \$sha/);
+assert.match(versionTagWorkflow, /autorelease%3A%20pending/);
+assert.match(versionTagWorkflow, /GH_TOKEN: \$\{\{ secrets\.RELEASE_PLEASE_TOKEN \}\}/);
 process.stdout.write("Updater design is fail-closed and uses the canonical HTTPS endpoint.\n");

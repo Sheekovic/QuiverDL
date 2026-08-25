@@ -36,11 +36,36 @@ jobs:
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           tag="v$version"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "$tag already exists; no tag was changed."
-            exit 0
+            tagged_commit="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
+            test "$tagged_commit" = "$GITHUB_SHA"
+            echo "$tag already exists at the reviewed release commit."
+          else
+            test -n "$RELEASE_TOKEN"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "QuiverDL $version"
+            git push "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag"
           fi
-          test -n "$RELEASE_TOKEN"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$tag" -m "QuiverDL $version"
-          git push "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$tag"
+      - name: Mark the merged release PR as tagged
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        shell: bash
+        run: |
+          test -n "$GH_TOKEN"
+          pulls="$(gh api "/repos/$GITHUB_REPOSITORY/pulls?state=closed&base=main&per_page=100")"
+          release_pr="$(jq -er --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and
+              .merge_commit_sha == $sha and
+              .head.ref == "release-please--branches--main--components--QuiverDL"
+            )] |
+            if length == 1 then .[0].number else error("expected one merged release PR") end
+          ' <<< "$pulls")"
+          labels="$(gh api "/repos/$GITHUB_REPOSITORY/issues/$release_pr/labels?per_page=100")"
+          if jq -e 'any(.name == "autorelease: pending")' <<< "$labels" >/dev/null; then
+            gh api --method DELETE \
+              "/repos/$GITHUB_REPOSITORY/issues/$release_pr/labels/autorelease%3A%20pending" \
+              >/dev/null
+          else
+            echo "Release PR #$release_pr no longer has the pending label."
+          fi
