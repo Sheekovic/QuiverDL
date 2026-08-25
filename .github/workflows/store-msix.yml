@@ -24,7 +24,8 @@ env:
   STORE_PRODUCT_ID: 9MVB2DD54NF4
 
 concurrency:
-  group: microsoft-store-msix
+  group: >-
+    microsoft-store-msix-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}-${{ (github.event_name == 'push' || inputs.publish == true) && 'publish' || 'verify' }}
   cancel-in-progress: false
 
 jobs:

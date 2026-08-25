@@ -68,7 +68,9 @@ application and submits the package to Microsoft certification automatically. A 
 the package, credentials, and product access without changing the Store unless its explicit
 **Publish** input is enabled. Immediately before either publication path, the workflow fetches the
 remote annotated tag again and refuses submission if it was deleted or no longer resolves to the
-commit that passed preflight.
+commit that passed preflight. Concurrency keys include both the release tag and operation, so a
+duplicate run can replace only the same tag's same intent; a manual verification or newer release
+cannot silently discard a queued Store submission.
 
 The publishing job uses the `microsoft-store` GitHub environment and these encrypted secrets:
 
