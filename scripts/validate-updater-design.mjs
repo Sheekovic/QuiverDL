@@ -159,16 +159,32 @@ assert.equal(
   2,
   "release caches must exclude stale Tauri bundle outputs",
 );
-assert.match(releaseWorkflow, /debs=\(target\/release\/bundle\/deb\/\*\.deb\)/);
-assert.match(releaseWorkflow, /rpms=\(target\/release\/bundle\/rpm\/\*\.rpm\)/);
 assert.equal(
   (
     releaseWorkflow.match(
-      /appimages=\(target\/release\/bundle\/appimage\/\*\.AppImage\)/g,
+      /target\/release\/bundle\/deb\/QuiverDL_\$\{version\}_amd64\.deb/g,
     ) ?? []
   ).length,
   2,
-  "the upload and updater manifest must select the same canonical AppImage directory",
+  "release upload and checksums must use the exact versioned Debian artifact",
+);
+assert.equal(
+  (
+    releaseWorkflow.match(
+      /target\/release\/bundle\/rpm\/QuiverDL-\$\{version\}-1\.x86_64\.rpm/g,
+    ) ?? []
+  ).length,
+  2,
+  "release upload and checksums must use the exact versioned RPM artifact",
+);
+assert.equal(
+  (
+    releaseWorkflow.match(
+      /target\/release\/bundle\/appimage\/QuiverDL_\$\{version\}_amd64\.AppImage/g,
+    ) ?? []
+  ).length,
+  3,
+  "release upload, checksums, and updater manifest must use the same versioned AppImage",
 );
 assert.doesNotMatch(
   releaseWorkflow,
