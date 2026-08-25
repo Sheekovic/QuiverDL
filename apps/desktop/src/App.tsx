@@ -2187,7 +2187,7 @@ function App() {
                   setTorrentInspection(null);
                   setReviewingBrowserRequest(null);
                 }}
-                placeholder={sourceMode === "media" ? "Paste a video or media page URL" : sourceMode === "torrent" ? "Paste a magnet or .torrent URL" : "https://example.com/archive.zip"}
+                placeholder={sourceMode === "media" ? "Paste a video or media page URL" : sourceMode === "torrent" ? "Paste a magnet link with HTTPS trackers" : "https://example.com/archive.zip"}
                 autoComplete="off"
                 disabled={inspecting}
                 required

@@ -6,7 +6,7 @@ network policy, and security review.
 
 | Area | Metalink | BitTorrent |
 | --- | --- | --- |
-| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | Remote `.torrent` URLs and magnet links after explicit consent |
+| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | Magnet links with HTTPS trackers after explicit consent; remote `.torrent` URLs deferred |
 | Network model | Known HTTP(S) mirrors | Trackers and many untrusted peers over additional protocols |
 | Integrity | Publisher-provided size and SHA-256 | BitTorrent piece hashes detect corruption but do not authenticate the publisher |
 | Privacy change | Mirror operators learn requests | Trackers and peers can learn the user's IP address and swarm identifier |
@@ -42,8 +42,9 @@ The first BitTorrent adapter uses maintained `librqbit` behind a narrow desktop 
 transfer requires an explicit privacy confirmation and an isolated task directory. It runs only in
 Direct connection mode, with DHT, local discovery, incoming listeners, uploading, and
 post-completion seeding disabled. Tracker contact, outbound TCP peers, and peer exchange remain
-visible in the disclosure. SOCKS routing, incoming connections, DHT, uTP, port mapping, automatic
-capture, and background seeding remain deferred behind separate review.
+visible in the disclosure. Magnet trackers must use HTTPS and resolve only to public addresses
+before dispatch. Remote `.torrent` URLs, SOCKS routing, incoming connections, DHT, uTP, port
+mapping, automatic capture, and background seeding remain deferred behind separate review.
 
 ## References
 

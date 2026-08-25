@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -17,6 +18,33 @@ use tauri::{State, ipc::Channel};
 use url::Url;
 
 use crate::persistence::AppSettings;
+
+const PEER_BLOCKLIST: &str = r#"
+unspecified-v4:0.0.0.0-0.255.255.255
+private-v4-a:10.0.0.0-10.255.255.255
+shared-address-space:100.64.0.0-100.127.255.255
+loopback-v4:127.0.0.0-127.255.255.255
+link-local-v4:169.254.0.0-169.254.255.255
+private-v4-b:172.16.0.0-172.31.255.255
+ietf-protocol-v4:192.0.0.0-192.0.0.255
+documentation-v4-a:192.0.2.0-192.0.2.255
+deprecated-relay-v4:192.88.99.0-192.88.99.255
+private-v4-c:192.168.0.0-192.168.255.255
+benchmark-v4:198.18.0.0-198.19.255.255
+documentation-v4-b:198.51.100.0-198.51.100.255
+documentation-v4-c:203.0.113.0-203.0.113.255
+multicast-v4:224.0.0.0-239.255.255.255
+reserved-v4:240.0.0.0-255.255.255.255
+unspecified-v6:::-::
+loopback-v6:::1-::1
+discard-v6:100::-100::ffff:ffff:ffff:ffff
+ietf-protocol-v6:2001::-2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff
+documentation-v6:2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff
+six-to-four-v6:2002::-2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+unique-local-v6:fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+link-local-v6:fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+multicast-v6:ff00::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+"#;
 
 struct ActiveTorrent {
     session: Arc<Session>,
@@ -121,6 +149,8 @@ pub(crate) async fn start_torrent_download(
     )
     .await?;
     let source = validate_torrent_source(&request.source)?;
+    let trackers = validate_magnet_trackers(&source)?;
+    validate_tracker_addresses(&trackers).await?;
     let destination = prepare_destination_directory(&request.destination_directory).await?;
     let job_destination = destination.join(format!("QuiverDL-{task_id}"));
     tokio::fs::create_dir_all(&job_destination)
@@ -132,30 +162,51 @@ pub(crate) async fn start_torrent_download(
     if !job_destination.starts_with(&destination) {
         return Err("The torrent folder escapes the selected destination".into());
     }
+    let blocklist_path = job_destination.join(".quiverdl-peer-blocklist");
+    tokio::fs::write(&blocklist_path, PEER_BLOCKLIST)
+        .await
+        .map_err(|error| format!("Could not prepare the torrent network policy: {error}"))?;
+    let blocklist_url = Url::from_file_path(&blocklist_path)
+        .map_err(|_| "Could not prepare the torrent network policy".to_string())?
+        .into();
     let session_options = SessionOptions {
         dht: None,
         listen: None,
         connect: Some(ConnectionOptions::default()),
         concurrent_init_limit: Some(1),
         peer_limit: Some(80),
+        blocklist_url: Some(blocklist_url),
         disable_upload: true,
         disable_local_service_discovery: true,
         ..SessionOptions::default()
     };
-    let session = Session::new_with_opts(job_destination, session_options)
-        .await
+    let session_result = Session::new_with_opts(job_destination, session_options).await;
+    let _ = tokio::fs::remove_file(&blocklist_path).await;
+    let session = session_result
         .map_err(|error| friendly_torrent_error("Could not initialize BitTorrent", &error))?;
     let options = AddTorrentOptions {
         // Each task owns an isolated folder, so rqbit can safely verify and resume its own files.
         overwrite: true,
         ..AddTorrentOptions::default()
     };
-    let handle = session
-        .add_torrent(AddTorrent::from_url(source.as_str()), Some(options))
-        .await
+    let added = tokio::select! {
+        added = session.add_torrent(AddTorrent::from_url(source.as_str()), Some(options)) => added,
+        _ = control.cancelled() => {
+            session.cancellation_token().cancel();
+            return Err("download was cancelled".into());
+        }
+    };
+    let handle = added
         .map_err(|error| friendly_torrent_error("Could not add this torrent", &error))?
         .into_handle()
         .ok_or_else(|| "The torrent metadata could not be opened".to_string())?;
+    if let Err(error) = control.checkpoint().await {
+        let _ = session
+            .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
+            .await;
+        session.cancellation_token().cancel();
+        return Err(error.to_string());
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     {
         let mut active = registry
@@ -211,7 +262,10 @@ pub(crate) async fn start_torrent_download(
                 name,
             });
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::select! {
+            _ = control.cancelled() => break Err("download was cancelled".into()),
+            () = tokio::time::sleep(Duration::from_millis(500)) => {}
+        }
     };
     let _ = session
         .delete(librqbit::api::TorrentIdOrHash::Id(handle.id()), false)
@@ -313,19 +367,100 @@ fn validate_torrent_source(value: &str) -> Result<String, String> {
     }
     if value.to_ascii_lowercase().starts_with("magnet:") {
         librqbit::Magnet::parse(value).map_err(|_| "The magnet link is invalid".to_string())?;
+        validate_magnet_trackers(value)?;
         return Ok(value.to_owned());
     }
-    let url = Url::parse(value).map_err(|_| "The .torrent URL is invalid".to_string())?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err(
-            "Only credential-free HTTP, HTTPS, and magnet torrent links are supported".into(),
-        );
+    Err("Remote .torrent URLs are not enabled until embedded trackers can be validated before network contact; use a magnet with HTTPS trackers".into())
+}
+
+fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
+    let magnet = Url::parse(value).map_err(|_| "The magnet link is invalid".to_string())?;
+    if magnet.scheme() != "magnet" {
+        return Err("The magnet link is invalid".into());
     }
-    Ok(value.to_owned())
+    let mut trackers = Vec::new();
+    for (key, value) in magnet.query_pairs() {
+        if key != "tr" {
+            continue;
+        }
+        if trackers.len() >= 32 {
+            return Err("The magnet link contains too many trackers".into());
+        }
+        let tracker = Url::parse(&value).map_err(|_| "A magnet tracker URL is invalid")?;
+        if tracker.scheme() != "https"
+            || tracker.host().is_none()
+            || !tracker.username().is_empty()
+            || tracker.password().is_some()
+        {
+            return Err("Only credential-free HTTPS magnet trackers are supported".into());
+        }
+        if tracker.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost")
+        }) {
+            return Err("Local and special-use magnet tracker addresses are blocked".into());
+        }
+        trackers.push(tracker);
+    }
+    if trackers.is_empty() {
+        return Err("A magnet needs at least one HTTPS tracker because DHT is disabled".into());
+    }
+    Ok(trackers)
+}
+
+async fn validate_tracker_addresses(trackers: &[Url]) -> Result<(), String> {
+    for tracker in trackers {
+        let host = tracker
+            .host_str()
+            .ok_or_else(|| "A magnet tracker URL has no host".to_string())?;
+        let port = tracker.port_or_known_default().unwrap_or(443);
+        let addresses = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| "A magnet tracker DNS lookup timed out".to_string())?
+        .map_err(|_| "A magnet tracker host could not be resolved".to_string())?
+        .collect::<Vec<_>>();
+        if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
+            return Err("Local and special-use magnet tracker addresses are blocked".into());
+        }
+    }
+    Ok(())
+}
+
+fn is_public_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => is_public_ipv4(address),
+        IpAddr::V6(address) => is_public_ipv6(address),
+    }
+}
+
+fn is_public_ipv4(address: Ipv4Addr) -> bool {
+    let [first, second, third, _] = address.octets();
+    !(address.is_private()
+        || address.is_loopback()
+        || address.is_link_local()
+        || address.is_multicast()
+        || address.is_broadcast()
+        || address.is_unspecified()
+        || first == 0
+        || first >= 240
+        || (first == 100 && (64..=127).contains(&second))
+        || (first == 192 && second == 0 && third == 0)
+        || (first == 192 && second == 0 && third == 2)
+        || (first == 198 && (second == 18 || second == 19))
+        || (first == 198 && second == 51 && third == 100)
+        || (first == 203 && second == 0 && third == 113))
+}
+
+fn is_public_ipv6(address: Ipv6Addr) -> bool {
+    let segments = address.segments();
+    !(address.is_loopback()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || (segments[0] & 0xfe00) == 0xfc00
+        || (segments[0] & 0xffc0) == 0xfe80
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
 }
 
 async fn prepare_destination_directory(value: &str) -> Result<PathBuf, String> {
@@ -371,16 +506,24 @@ fn bounded_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sanitized_network_origins, validate_network_start, validate_torrent_source};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::{
+        is_public_ip, sanitized_network_origins, validate_network_start, validate_torrent_source,
+    };
     use crate::persistence::AppSettings;
 
     #[test]
-    fn accepts_magnets_and_remote_torrent_files() {
+    fn accepts_https_tracker_magnets_and_defers_remote_torrent_files() {
         assert!(
-            validate_torrent_source("magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862")
+            validate_torrent_source("magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862&tr=https%3A%2F%2Ftracker.example%2Fannounce")
                 .is_ok()
         );
-        assert!(validate_torrent_source("https://example.test/linux.torrent").is_ok());
+        assert!(validate_torrent_source("https://example.test/linux.torrent").is_err());
+        assert!(
+            validate_torrent_source("magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862&tr=udp%3A%2F%2Ftracker.example%3A80")
+                .is_err()
+        );
     }
 
     #[test]
@@ -413,5 +556,16 @@ mod tests {
             sanitized_network_origins("https://downloads.example/private/file.torrent?token=abc"),
             ["https://downloads.example"]
         );
+    }
+
+    #[test]
+    fn blocks_non_public_tracker_addresses() {
+        assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!is_public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert!(is_public_ip(IpAddr::V6(
+            "2606:4700:4700::1111".parse().unwrap()
+        )));
     }
 }

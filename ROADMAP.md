@@ -38,7 +38,8 @@ This roadmap communicates direction rather than fixed deadlines. Priorities may 
 
 - [x] yt-dlp URL detection and Python API metadata extraction
 - [x] Media quality selection, audio extraction, progress hooks, cancellation, and clear errors
-- [x] Consent-gated direct-only magnet and remote `.torrent` transfers with pause, resume, progress, cancellation, and disabled DHT/listeners/uploads
+- [x] Consent-gated direct-only magnet transfers with validated HTTPS trackers, pause/resume/cancel, and disabled DHT/listeners/uploads
+- [ ] Safely preflight remote `.torrent` metainfo and every embedded tracker/web-seed before network dispatch
 - [ ] Bundle a maintained Python/yt-dlp runtime per release target to remove the optional system prerequisite
 
 ## Browser integration

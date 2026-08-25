@@ -23,7 +23,7 @@ def emit(payload: dict[str, Any]) -> None:
 
 def safe_error(error: BaseException) -> str:
     message = str(error).strip().splitlines()[-1] if str(error).strip() else error.__class__.__name__
-    message = re.sub(r"(?:https?|ftp)://\S+", "[media URL]", message)
+    message = re.sub(r"(?:https?|ftp)://\S+", "[media URL]", message, flags=re.IGNORECASE)
     return message[:600]
 
 

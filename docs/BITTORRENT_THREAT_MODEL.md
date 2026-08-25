@@ -5,8 +5,10 @@
 **Constrained adapter under review.** BitTorrent remains outside the HTTP engine. The current
 desktop adapter requires per-transfer confirmation and Direct connection mode; it disables DHT,
 local discovery, incoming listeners, uploading, and post-completion seeding. It permits tracker
-contact, outbound TCP peers, and peer exchange only after disclosure. SOCKS routing, DHT, uTP,
-incoming connections, port mapping, automatic capture, and background seeding remain deferred.
+contact, outbound TCP peers, and peer exchange only after disclosure. Magnet trackers must use
+HTTPS and pass public-address classification before dispatch. Remote `.torrent` URLs, SOCKS
+routing, DHT, uTP, incoming connections, port mapping, automatic capture, and background seeding
+remain deferred.
 
 [BEP 3](https://www.bittorrent.org/beps/bep_0003.html) defines v1 metainfo, trackers, piece hashes,
 and a peer protocol in which downloaders also upload. [BEP 52](https://www.bittorrent.org/beps/bep_0052.html)

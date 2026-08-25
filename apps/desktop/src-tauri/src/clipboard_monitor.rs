@@ -128,7 +128,6 @@ fn downloadable_candidate(value: &str) -> Option<ClipboardCandidate> {
         ".mp3",
         ".flac",
         ".pdf",
-        ".torrent",
         ".dmg",
         ".deb",
         ".rpm",
@@ -141,13 +140,7 @@ fn downloadable_candidate(value: &str) -> Option<ClipboardCandidate> {
     }
     Some(ClipboardCandidate {
         url: value.to_owned(),
-        kind: if path.ends_with(".torrent") {
-            "torrent"
-        } else if media_host {
-            "media"
-        } else {
-            "direct"
-        },
+        kind: if media_host { "media" } else { "direct" },
     })
 }
 
@@ -169,6 +162,7 @@ mod tests {
             downloadable_candidate("magnet:?xt=urn:btih:0123456789abcdef").map(|item| item.kind),
             Some("torrent")
         );
+        assert!(downloadable_candidate("https://example.test/file.torrent").is_none());
         assert!(downloadable_candidate("https://user:secret@example.test/file.zip").is_none());
         assert!(downloadable_candidate("ftp://example.test/file.zip").is_none());
         assert!(downloadable_candidate("copied text").is_none());

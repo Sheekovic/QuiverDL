@@ -54,7 +54,9 @@ recovers interrupted work, provides adaptive themes, English/Arabic direction su
 notification behavior, supports durable scheduled starts and parallel or sequential FIFO queues,
 supports direct, system, and credential-safe custom proxy routing, and never silently overwrites a
 destination. It also provides an opt-in clipboard monitor, customizable MIME/extension routing,
-yt-dlp media metadata and quality selection, and native magnet/remote `.torrent` transfers.
+yt-dlp media metadata and quality selection, and native magnet transfers with validated HTTPS
+trackers. Remote `.torrent` URLs remain deferred until embedded endpoints can be validated before
+network dispatch.
 BitTorrent is an explicit, direct-connection-only action: QuiverDL shows a privacy confirmation
 before starting, rejects System/Custom HTTP proxy modes that cannot cover peer traffic, and disables
 DHT, local discovery, incoming listeners, uploading, and post-completion seeding.
