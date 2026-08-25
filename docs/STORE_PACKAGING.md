@@ -60,10 +60,27 @@ It is intentionally unsigned: Partner Center accepts an unsigned MSIX and Micros
 certified package for Store distribution. Upload the `.msix` under **Packages** in the app submission;
 do not use the PFN, Package SID, or Store ID as signing secrets.
 
-The **Microsoft Store MSIX** GitHub Actions workflow performs the same build and retains the package
-as a private workflow artifact for 30 days. It can be started manually and also runs for version
-tags. Before submitting, run the Windows App Certification Kit and test Store installation, launch,
-download, resume, and uninstall behavior on a clean Windows 11 VM.
+The **Microsoft Store MSIX** GitHub Actions workflow accepts only an existing annotated version tag
+whose version matches every package and whose commit is contained in `main`. It builds the same
+validated package, records and rechecks its SHA-256 digest, and retains both files as a private
+workflow artifact for 30 days. A version-tag event authenticates with the dedicated Partner Center
+application and submits the package to Microsoft certification automatically. A manual run verifies
+the package, credentials, and product access without changing the Store unless its explicit
+**Publish** input is enabled.
+
+The publishing job uses the `microsoft-store` GitHub environment and these encrypted secrets:
+
+- `AZURE_AD_TENANT_ID`
+- `SELLER_ID`
+- `AZURE_AD_APPLICATION_CLIENT_ID`
+- `AZURE_AD_APPLICATION_SECRET`
+
+The Entra application must have only the Partner Center **Manager (Windows)** role. Protect the
+environment so only `main` and `v*` tags can deploy, rotate the client secret before it expires, and
+never place any credential in a workflow input, artifact, log, pull request, or repository file.
+Before creating a release tag, run the Windows App Certification Kit and test Store installation,
+launch, download, resume, and uninstall behavior on a clean Windows 11 VM. Microsoft still performs
+certification and controls when an accepted update becomes available to Store users.
 
 The existing `tauri.microsoftstore.conf.json` and `prepare-microsoft-store-config.ps1` remain only
 for the alternative linked EXE/MSI Store route. That route still needs the owner's Authenticode

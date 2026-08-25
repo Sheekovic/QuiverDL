@@ -2,6 +2,16 @@ name: Microsoft Store MSIX
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated v* tag to package
+        required: true
+        type: string
+      publish:
+        description: Submit the package to Microsoft certification
+        required: true
+        default: false
+        type: boolean
   push:
     tags:
       - "v*"
@@ -9,16 +19,55 @@ on:
 permissions:
   contents: read
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  STORE_PRODUCT_ID: 9MVB2DD54NF4
+
 concurrency:
-  group: store-msix-${{ github.ref }}
+  group: microsoft-store-msix
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate release identity
+    runs-on: ubuntu-latest
+    outputs:
+      release_commit: ${{ steps.release-identity.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+      - name: Require an annotated tag on reviewed main history
+        id: release-identity
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$RELEASE_TAG" = "v$(cat version.txt)"
+          tag_ref="refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "$tag_ref")" = "tag"
+          tag_commit="$(git rev-list -n 1 "$tag_ref")"
+          test "$tag_commit" = "$(git rev-parse HEAD)"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$tag_commit" FETCH_HEAD
+          if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
+            test "$GITHUB_REF" = "refs/heads/main"
+          fi
+          echo "commit=$tag_commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Require tag, desktop, extension, and Store versions to match
+        run: node scripts/validate-store-packaging.mjs
+
   package:
     name: Build Store-ready x64 MSIX
+    needs: preflight
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.release_commit }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -33,10 +82,115 @@ jobs:
       - name: Build and validate unsigned Store package
         shell: powershell
         run: .\scripts\package-msix.ps1 -OutputDirectory $env:RUNNER_TEMP\store
+      - name: Record the package checksum
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\store" -Filter '*.msix' -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one MSIX package, found $($packages.Count)"
+          }
+          $package = $packages[0]
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash.ToLowerInvariant()
+          "$hash  $($package.Name)" | Set-Content -LiteralPath "$($package.FullName).sha256" -Encoding ascii
       - name: Upload Partner Center submission artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: QuiverDL-Microsoft-Store-x64
-          path: ${{ runner.temp }}/store/*.msix
+          name: QuiverDL-Microsoft-Store-x64-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/store/*.msix*
           if-no-files-found: error
           retention-days: 30
+
+  store:
+    name: Verify credentials and submit to Microsoft Store
+    needs:
+      - preflight
+      - package
+    runs-on: windows-latest
+    environment:
+      name: microsoft-store
+      url: https://apps.microsoft.com/detail/9MVB2DD54NF4
+    steps:
+      - name: Download the validated package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: QuiverDL-Microsoft-Store-x64-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/store
+      - name: Verify the downloaded package checksum
+        id: package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP\store" -Filter '*.msix' -File)
+          if ($packages.Count -ne 1) {
+            throw "Expected exactly one downloaded MSIX package, found $($packages.Count)"
+          }
+          $package = $packages[0]
+          $checksumPath = "$($package.FullName).sha256"
+          if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+            throw 'The package checksum file is missing'
+          }
+          $expected = ((Get-Content -Raw -LiteralPath $checksumPath) -split '\s+')[0].ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') {
+            throw 'The package checksum file is malformed'
+          }
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw 'The downloaded MSIX checksum does not match the package job'
+          }
+          "path=$($package.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Set up Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.4.1
+      - name: Require protected Store credentials
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          $required = @(
+            'AZURE_AD_TENANT_ID',
+            'SELLER_ID',
+            'AZURE_AD_APPLICATION_CLIENT_ID',
+            'AZURE_AD_APPLICATION_SECRET'
+          )
+          foreach ($name in $required) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "The required $name secret is missing"
+            }
+          }
+      - name: Authenticate and verify QuiverDL Store access
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+        run: |
+          msstore settings --enableTelemetry false
+          if ($LASTEXITCODE -ne 0) { throw 'Could not disable Microsoft Store CLI telemetry' }
+          msstore reconfigure `
+            --tenantId $env:AZURE_AD_TENANT_ID `
+            --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
+            --clientSecret $env:AZURE_AD_APPLICATION_SECRET
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store authentication failed' }
+          msstore apps get $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'The publisher cannot access the QuiverDL Store product' }
+      - name: Submit package to Microsoft certification
+        if: github.event_name == 'push' || inputs.publish == true
+        shell: pwsh
+        env:
+          PACKAGE_PATH: ${{ steps.package.outputs.path }}
+        run: |
+          msstore publish $env:PACKAGE_PATH --appId $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'Microsoft Store package submission failed' }
+          msstore submission status $env:STORE_PRODUCT_ID
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the new Store submission status' }
+      - name: Report verification-only run
+        if: github.event_name == 'workflow_dispatch' && inputs.publish != true
+        shell: pwsh
+        run: |
+          "### Microsoft Store verification complete" >> $env:GITHUB_STEP_SUMMARY
+          "The tagged MSIX and Partner Center credentials were validated. No Store submission was created." >> $env:GITHUB_STEP_SUMMARY
