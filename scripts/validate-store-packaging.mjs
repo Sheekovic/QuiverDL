@@ -67,6 +67,7 @@ const msixManifest = await readFile(
   path.join(repository, "packaging", "windows", "msix", "AppxManifest.xml.template"),
   "utf8",
 );
+const msixPackager = await readFile(path.join(repository, "scripts", "package-msix.ps1"), "utf8");
 const storeWorkflow = await readFile(
   path.join(repository, ".github", "workflows", "store-msix.yml"),
   "utf8",
@@ -132,6 +133,16 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
+assert.match(
+  msixPackager,
+  /foreach \(\$resourceEntry in @\(\$tauriConfig\.bundle\.resources\)\)/,
+  "Microsoft Store packaging must include every configured Tauri resource",
+);
+assert.match(
+  msixPackager,
+  /The validated MSIX is missing Tauri resource/,
+  "Microsoft Store packaging must verify resources after unpacking the package",
+);
 const storeConfigureIndex = storeWorkflow.indexOf("msstore reconfigure");
 const storeSettingsIndex = storeWorkflow.indexOf("msstore settings --enableTelemetry false");
 assert.notEqual(storeConfigureIndex, -1, "Microsoft Store workflow must configure the CLI");

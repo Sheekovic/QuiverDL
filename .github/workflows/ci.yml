@@ -189,6 +189,7 @@ jobs:
           node --test ../../scripts/test-sync-release-lockfile.mjs
           node --test ../../scripts/test-top-level-yaml-string.mjs
           node ../../scripts/validate-store-packaging.mjs
+          python3 ../../scripts/test-media-helper.py
           node --test ../../scripts/test-package-extensions.mjs
           node ../../scripts/package-extensions.mjs ../../dist/store
 
@@ -240,7 +241,39 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+      - uses: actions/setup-node@v7
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Build desktop frontend assets
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run build
       - name: Check Windows desktop integration
         if: ${{ needs.changes.outputs.desktop == 'true' }}
         run: cargo check -p quiver-desktop -p quiver-native-host --all-targets
+      - name: Smoke test Windows desktop startup and Store resources
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        shell: powershell
+        run: |
+          npm --prefix apps\desktop run tauri -- build --no-bundle
+          if ($LASTEXITCODE -ne 0) { throw 'The Windows production desktop smoke build failed.' }
+          $executable = Resolve-Path .\target\release\quiver-desktop.exe
+          $process = Start-Process -FilePath $executable -PassThru
+          try {
+            if ($process.WaitForExit(8000)) {
+              throw "QuiverDL exited during the startup smoke test with code $($process.ExitCode)."
+            }
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+          $packageOutput = Join-Path $env:RUNNER_TEMP 'quiverdl-store-smoke'
+          .\scripts\package-msix.ps1 `
+            -ExecutablePath $executable `
+            -OutputDirectory $packageOutput `
+            -SkipBuild
 

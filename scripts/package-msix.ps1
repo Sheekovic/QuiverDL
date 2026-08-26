@@ -8,7 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot
 $desktopDirectory = Join-Path $repository 'apps\desktop'
-$tauriConfigPath = Join-Path $desktopDirectory 'src-tauri\tauri.conf.json'
+$tauriDirectory = Join-Path $desktopDirectory 'src-tauri'
+$tauriConfigPath = Join-Path $tauriDirectory 'tauri.conf.json'
 $manifestTemplatePath = Join-Path $repository 'packaging\windows\msix\AppxManifest.xml.template'
 $iconDirectory = Join-Path $desktopDirectory 'src-tauri\icons'
 
@@ -92,6 +93,30 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stageDirectory 'Assets') -Force | Out-Null
     Copy-Item -LiteralPath $resolvedExecutable -Destination (Join-Path $stageDirectory 'QuiverDL.exe')
 
+    $resourceRoot = [IO.Path]::GetFullPath($tauriDirectory)
+    $resourceRootPrefix = $resourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $packagedResources = @()
+    foreach ($resourceEntry in @($tauriConfig.bundle.resources)) {
+        if ($resourceEntry -isnot [string] -or [string]::IsNullOrWhiteSpace($resourceEntry)) {
+            throw 'MSIX packaging only supports non-empty file resource paths.'
+        }
+        $resourceRelativePath = $resourceEntry.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $resourceSource = [IO.Path]::GetFullPath((Join-Path $resourceRoot $resourceRelativePath))
+        if (-not $resourceSource.StartsWith($resourceRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Tauri resource escapes the src-tauri directory: $resourceEntry"
+        }
+        if (-not (Test-Path -LiteralPath $resourceSource -PathType Leaf)) {
+            throw "Required Tauri resource not found: $resourceSource"
+        }
+        $resourceDestination = Join-Path $stageDirectory $resourceRelativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $resourceDestination) -Force | Out-Null
+        Copy-Item -LiteralPath $resourceSource -Destination $resourceDestination
+        $packagedResources += [pscustomobject]@{
+            RelativePath = $resourceRelativePath
+            SourcePath = $resourceSource
+        }
+    }
+
     $assetNames = @('Square150x150Logo.png', 'Square44x44Logo.png', 'StoreLogo.png')
     foreach ($assetName in $assetNames) {
         $assetPath = Join-Path $iconDirectory $assetName
@@ -138,6 +163,17 @@ try {
     $packageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $unpackedExecutable).Hash
     if ($sourceHash -ne $packageHash) {
         throw 'The executable in the validated MSIX differs from the source executable.'
+    }
+    foreach ($resource in $packagedResources) {
+        $unpackedResource = Join-Path $unpackDirectory $resource.RelativePath
+        if (-not (Test-Path -LiteralPath $unpackedResource -PathType Leaf)) {
+            throw "The validated MSIX is missing Tauri resource: $($resource.RelativePath)"
+        }
+        $resourceSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resource.SourcePath).Hash
+        $resourcePackageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $unpackedResource).Hash
+        if ($resourceSourceHash -ne $resourcePackageHash) {
+            throw "The Tauri resource in the validated MSIX differs from its source: $($resource.RelativePath)"
+        }
     }
 
     $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputPath).Hash.ToLowerInvariant()
