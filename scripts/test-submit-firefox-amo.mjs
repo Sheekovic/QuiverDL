@@ -85,6 +85,49 @@ test("the AMO version prefix keeps a dotless manifest version from becoming a da
   assert.match(requestedUrl, /versions\/v1\/$/);
 });
 
+test("AMO JSON error bodies are never copied into release logs", async () => {
+  await assert.rejects(
+    submitFirefoxUpdate({
+      archivePath: "not-read-on-version-lookup-failure.zip",
+      manifest,
+      releaseTag: "v1.2.3",
+      releaseCommit,
+      issuer,
+      secret,
+      fetchImpl: async () =>
+        jsonResponse(403, {
+          detail: "Rejected https://private.example/token",
+          filename: "customer-secret.zip",
+        }),
+    }),
+    (error) => {
+      assert.equal(error.message, "Version lookup failed with AMO HTTP 403");
+      assert.doesNotMatch(error.message, /private\.example|customer-secret/);
+      return true;
+    },
+  );
+});
+
+test("AMO non-JSON response bodies are never copied into release logs", async () => {
+  await assert.rejects(
+    submitFirefoxUpdate({
+      archivePath: "not-read-on-version-lookup-failure.zip",
+      manifest,
+      releaseTag: "v1.2.3",
+      releaseCommit,
+      issuer,
+      secret,
+      fetchImpl: async () =>
+        new Response("internal proxy dump: https://private.example/token", { status: 502 }),
+    }),
+    (error) => {
+      assert.equal(error.message, "AMO returned non-JSON data with HTTP 502");
+      assert.doesNotMatch(error.message, /private\.example|proxy dump/);
+      return true;
+    },
+  );
+});
+
 test("a new listed package is validated before its version is created", async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "quiverdl-amo-test-"));
   const archivePath = path.join(temporary, "quiverdl-firefox-1.2.3.zip");
@@ -155,7 +198,7 @@ test("a package rejected by Mozilla's validator is never submitted as a version"
           });
         },
       }),
-      /Mozilla rejected the package: Forbidden remote code/,
+      /Mozilla rejected the package: 1 validator error; inspect the AMO Developer Hub/,
     );
     assert.equal(calls, 2);
   } finally {

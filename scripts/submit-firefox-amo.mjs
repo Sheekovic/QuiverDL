@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const API_BASE = "https://addons.mozilla.org/api/v5/";
 const ADDON_ID = "quiverdl@quiverdl.app";
-const MAX_RESPONSE_TEXT = 2_000;
 
 function encodeJson(value) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
@@ -32,13 +31,12 @@ async function parseResponse(response) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`AMO returned non-JSON data (${response.status}): ${text.slice(0, MAX_RESPONSE_TEXT)}`);
+    throw new Error(`AMO returned non-JSON data with HTTP ${response.status}`);
   }
 }
 
-function responseError(action, response, data) {
-  const detail = JSON.stringify(data ?? {}).slice(0, MAX_RESPONSE_TEXT);
-  return new Error(`${action} failed with AMO HTTP ${response.status}: ${detail}`);
+function responseError(action, response) {
+  return new Error(`${action} failed with AMO HTTP ${response.status}`);
 }
 
 async function amoRequest({ fetchImpl, issuer, secret, pathname, method = "GET", body, headers }) {
@@ -65,7 +63,7 @@ async function findVersion(credentials, version) {
     pathname: versionPath(ADDON_ID, version),
   });
   if (result.response.status === 404) return null;
-  if (!result.response.ok) throw responseError("Version lookup", result.response, result.data);
+  if (!result.response.ok) throw responseError("Version lookup", result.response);
   if (result.data?.version !== version) {
     throw new Error(`AMO returned version ${JSON.stringify(result.data?.version)} instead of ${version}`);
   }
@@ -75,11 +73,10 @@ async function findVersion(credentials, version) {
 function validationSummary(upload) {
   const messages = upload?.validation?.messages;
   if (!Array.isArray(messages)) return "no validator details were returned";
-  return messages
-    .filter((message) => message?.type === "error")
-    .slice(0, 10)
-    .map((message) => message.message ?? message.description ?? JSON.stringify(message))
-    .join("; ") || "the validator rejected the package without an error message";
+  const errorCount = messages.filter((message) => message?.type === "error").length;
+  return errorCount > 0
+    ? `${errorCount} validator error${errorCount === 1 ? "" : "s"}; inspect the AMO Developer Hub`
+    : "the validator rejected the package; inspect the AMO Developer Hub";
 }
 
 export async function submitFirefoxUpdate({
@@ -125,7 +122,7 @@ export async function submitFirefoxUpdate({
     method: "POST",
     body: form,
   });
-  if (!uploaded.response.ok) throw responseError("Package upload", uploaded.response, uploaded.data);
+  if (!uploaded.response.ok) throw responseError("Package upload", uploaded.response);
   const uuid = uploaded.data?.uuid;
   if (typeof uuid !== "string" || !uuid) throw new Error("AMO upload response did not contain a UUID");
 
@@ -133,7 +130,7 @@ export async function submitFirefoxUpdate({
   for (let attempt = 0; !upload?.processed && attempt < maxPolls; attempt += 1) {
     await sleep(pollIntervalMs);
     const polled = await amoRequest({ ...credentials, pathname: `addons/upload/${encodeURIComponent(uuid)}/` });
-    if (!polled.response.ok) throw responseError("Upload validation lookup", polled.response, polled.data);
+    if (!polled.response.ok) throw responseError("Upload validation lookup", polled.response);
     upload = polled.data;
   }
   if (!upload?.processed) throw new Error("Mozilla did not finish validating the package within ten minutes");
@@ -169,7 +166,7 @@ export async function submitFirefoxUpdate({
         status: racedVersion.file?.status ?? "unknown",
       };
     }
-    throw responseError("Version creation", created.response, created.data);
+    throw responseError("Version creation", created.response);
   }
   if (created.data?.version !== version) {
     throw new Error(`AMO created version ${JSON.stringify(created.data?.version)} instead of ${version}`);
