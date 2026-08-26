@@ -1,6 +1,6 @@
 [package]
 name = "quiver-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "QuiverDL desktop application"
 authors.workspace = true
 edition.workspace = true

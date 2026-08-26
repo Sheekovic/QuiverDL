@@ -2,6 +2,17 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.3.1](https://github.com/Sheekovic/QuiverDL/compare/v0.3.0...v0.3.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* honor Microsoft Store CLI upload contract ([#43](https://github.com/Sheekovic/QuiverDL/issues/43)) ([eb58543](https://github.com/Sheekovic/QuiverDL/commit/eb585434b4db8fbb7c260af7ec4592c8efff2bfa))
+* make v0.3.0 artifact publication deterministic ([#42](https://github.com/Sheekovic/QuiverDL/issues/42)) ([4e2191a](https://github.com/Sheekovic/QuiverDL/commit/4e2191a4b43880b9d03ec8e78839cc977f66ea46))
+* publish the validated Store MSIX ([#44](https://github.com/Sheekovic/QuiverDL/issues/44)) ([8c77261](https://github.com/Sheekovic/QuiverDL/commit/8c7726120ef6b1b721988c104c84b67b7ce0bd27))
+* restore Store startup and polish desktop UI ([#48](https://github.com/Sheekovic/QuiverDL/issues/48)) ([f60a56f](https://github.com/Sheekovic/QuiverDL/commit/f60a56f1395b0a86b72b9b6c4b518f42bb6c0a9b))
+* unblock v0.3.0 publication ([#41](https://github.com/Sheekovic/QuiverDL/issues/41)) ([e23d3a6](https://github.com/Sheekovic/QuiverDL/commit/e23d3a67f37fef57f81a5d7ba31f0c6bff45a0c8))
+
 ## [0.3.0](https://github.com/Sheekovic/QuiverDL/compare/v0.2.0...v0.3.0) (2026-08-25)
 
 
