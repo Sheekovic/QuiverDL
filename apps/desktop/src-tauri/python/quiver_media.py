@@ -22,7 +22,12 @@ def emit(payload: dict[str, Any]) -> None:
 
 
 def safe_error(error: BaseException) -> str:
-    message = str(error).strip().splitlines()[-1] if str(error).strip() else error.__class__.__name__
+    raw_message = str(error).strip()
+    lowered = raw_message.lower()
+    if "do not open issues for it" in lowered or "website is not supported and will not be supported" in lowered:
+        return "This media website is not supported by yt-dlp. Try a direct media URL or another supported website."
+    message = next((line.strip() for line in raw_message.splitlines() if line.strip()), error.__class__.__name__)
+    message = re.sub(r"^ERROR:\s*", "", message, flags=re.IGNORECASE)
     message = re.sub(r"(?:https?|ftp)://\S+", "[media URL]", message, flags=re.IGNORECASE)
     return message[:600]
 
