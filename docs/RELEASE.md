@@ -62,7 +62,10 @@ repository variable `ENABLE_AMO_PUBLISH` to `true`. Each future tagged release t
 stable `quiverdl@quiverdl.app` ID and synchronized version, submits it to the listed AMO channel,
 and exits after Mozilla accepts the submission instead of waiting for review approval. Rejected or
 manually reviewed versions remain visible in the Developer Hub and are not delivered to users until
-Mozilla approves them.
+Mozilla approves them. The AMO job starts only after the matching GitHub release is public. If AMO
+submission alone fails afterward, manually dispatch the same published tag from reviewed `main`;
+the workflow skips package rebuilding and retries with the current reviewed AMO client against the
+immutable tagged extension archive.
 
 Direct-download update signing is a separate trust root from operating-system code signing. Follow
 the [secure updater design](UPDATER.md): generate and back up the Tauri key offline, add the encrypted

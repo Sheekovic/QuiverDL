@@ -129,6 +129,10 @@ assert.match(
   releaseWorkflow,
   /workflow_commit: \$\{\{ steps\.release-identity\.outputs\.workflow_commit \}\}/,
 );
+assert.match(
+  releaseWorkflow,
+  /release_published: \$\{\{ steps\.release-identity\.outputs\.release_published \}\}/,
+);
 assert.match(releaseWorkflow, /test "\$GITHUB_REF" = "refs\/heads\/main"/);
 assert.match(releaseWorkflow, /git merge-base --is-ancestor "\$GITHUB_SHA" FETCH_HEAD/);
 assert.match(
@@ -142,8 +146,28 @@ assert.match(
 assert.match(releaseWorkflow, /manifest_script="\.release-tools\/scripts\/generate-update-manifest\.mjs"/);
 assert.match(
   releaseWorkflow,
+  /linux:[\s\S]*?if: github\.event_name != 'pull_request' && needs\.preflight\.outputs\.release_published != 'true'/,
+  "manual recovery of a public release must skip package rebuilding",
+);
+assert.match(
+  releaseWorkflow,
   /firefox-addon:[\s\S]*?WORKFLOW_COMMIT: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?name: Check out reviewed AMO recovery tooling[\s\S]*?ref: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?path: \.amo-release-tools[\s\S]*?persist-credentials: false/,
   "manual AMO retries must use reviewed recovery tooling",
+);
+assert.match(
+  releaseWorkflow,
+  /firefox-addon:[\s\S]*?needs:[\s\S]*?- publish-linux[\s\S]*?always\(\)[\s\S]*?needs\.browser-extensions\.result == 'success' && needs\.publish-linux\.result == 'success'[\s\S]*?github\.event_name == 'workflow_dispatch' && needs\.preflight\.outputs\.release_published == 'true'/,
+  "AMO submission must follow publication or an already-public manual recovery",
+);
+assert.match(
+  releaseWorkflow,
+  /firefox-addon:[\s\S]*?uses: actions\/setup-node@[a-f0-9]+[\s\S]*?node-version: 22[\s\S]*?name: Reconfirm the immutable release tag and Firefox version/,
+  "Firefox release validation must use the pinned Node toolchain",
+);
+assert.match(
+  releaseWorkflow,
+  /name: Require the matching GitHub release to be public[\s\S]*?gh release view "\$RELEASE_TAG" --json isDraft --jq \.isDraft/,
+  "AMO submission must independently reconfirm public release state",
 );
 assert.match(
   releaseWorkflow,
