@@ -151,8 +151,23 @@ assert.equal(
 );
 assert.equal(
   (releaseWorkflow.match(/ref: \$\{\{ needs\.preflight\.outputs\.release_commit \}\}/g) ?? []).length,
-  3,
+  4,
   "every publishing checkout must pin the commit validated by preflight",
+);
+assert.match(
+  releaseWorkflow,
+  /windows-portable:[\s\S]*?if: github\.event_name != 'pull_request' && vars\.ENABLE_SIGNED_RELEASES != 'true'[\s\S]*?build --no-bundle --target \$env:WINDOWS_TARGET/,
+  "unsigned Windows portable releases must not require code-signing credentials",
+);
+assert.match(
+  releaseWorkflow,
+  /windows-portable:[\s\S]*?python\/quiver_media\.py[\s\S]*?gh release upload/,
+  "the unsigned Windows portable archive must include the media helper",
+);
+assert.match(
+  releaseWorkflow,
+  /publish-linux:[\s\S]*?- windows-portable[\s\S]*?needs\.windows-portable\.result == 'success'/,
+  "the GitHub release must wait for the portable Windows archive",
 );
 assert.equal(
   (releaseWorkflow.match(/!target\/\*\*\/bundle/g) ?? []).length,
