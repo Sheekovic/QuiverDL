@@ -60,9 +60,9 @@ test("an existing AMO version makes release submission idempotent", async () => 
   });
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /quiverdl%40quiverdl\.app\/versions\/v1\.2\.3\/$/);
-  assert.match(calls[0].options.headers.Authorization, /^JWT /);
+  assert.match(calls[0].options.headers.get("Authorization"), /^JWT /);
   assert.equal(calls[0].options.redirect, "error");
-  assert.doesNotMatch(calls[0].options.headers.Authorization, new RegExp(secret));
+  assert.doesNotMatch(calls[0].options.headers.get("Authorization"), new RegExp(secret));
 });
 
 test("the AMO version prefix keeps a dotless manifest version from becoming a database ID", async () => {
@@ -199,6 +199,8 @@ test("a new listed package is validated before its version is created", async ()
     assert.ok(calls[1].options.body instanceof FormData);
     assert.equal(calls[2].options.method, "GET");
     assert.equal(calls[3].options.method, "POST");
+    assert.equal(calls[3].options.headers.get("Content-Type"), "application/json");
+    assert.match(calls[3].options.headers.get("Authorization"), /^JWT /);
     const metadata = JSON.parse(calls[3].options.body);
     assert.equal(metadata.upload, "upload-uuid");
     assert.match(metadata.approval_notes, /commit a{40}/);
@@ -236,6 +238,38 @@ test("a package rejected by Mozilla's validator is never submitted as a version"
       /Mozilla rejected the package: 1 validator error; inspect the AMO Developer Hub/,
     );
     assert.equal(calls, 2);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("a failed race lookup cannot hide the original version creation error", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "quiverdl-amo-create-error-test-"));
+  const archivePath = path.join(temporary, "quiverdl-firefox-1.2.3.zip");
+  await writeFile(archivePath, Buffer.from("creation failure test archive"));
+  const responses = [
+    jsonResponse(404, { detail: "Not found." }),
+    jsonResponse(201, { uuid: "creation-failure", processed: true, valid: true, version: "1.2.3" }),
+    jsonResponse(500, { detail: "Version database unavailable" }),
+    jsonResponse(503, { detail: "Lookup database unavailable" }),
+  ];
+  try {
+    await assert.rejects(
+      submitFirefoxUpdate({
+        archivePath,
+        manifest,
+        releaseTag: "v1.2.3",
+        releaseCommit,
+        issuer,
+        secret,
+        fetchImpl: async () => responses.shift(),
+      }),
+      (error) => {
+        assert.equal(error.message, "Version creation failed with AMO HTTP 500");
+        return true;
+      },
+    );
+    assert.equal(responses.length, 0);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

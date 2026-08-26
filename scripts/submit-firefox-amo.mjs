@@ -41,12 +41,15 @@ function responseError(action, response) {
 
 async function amoRequest({ fetchImpl, issuer, secret, pathname, method = "GET", body, headers }) {
   const authorization = `JWT ${createAmoJwt({ issuer, secret })}`;
+  const requestHeaders = new Headers(headers);
+  requestHeaders.set("Accept", "application/json");
+  requestHeaders.set("Authorization", authorization);
   const response = await fetchImpl(new URL(pathname, API_BASE), {
     method,
     body,
     redirect: "error",
     signal: AbortSignal.timeout(60_000),
-    headers: { Authorization: authorization, Accept: "application/json", ...headers },
+    headers: requestHeaders,
   });
   const data = await parseResponse(response);
   return { response, data };
@@ -175,16 +178,22 @@ export async function submitFirefoxUpdate({
     headers: { "Content-Type": "application/json" },
   });
   if (!created.response.ok) {
-    const racedVersion = await findVersion(credentials, version);
-    if (racedVersion) {
-      return {
-        addonId,
-        version,
-        alreadyExisted: true,
-        status: racedVersion.file?.status ?? "unknown",
-      };
+    const creationError = responseError("Version creation", created.response);
+    try {
+      const racedVersion = await findVersion(credentials, version);
+      if (racedVersion) {
+        return {
+          addonId,
+          version,
+          alreadyExisted: true,
+          status: racedVersion.file?.status ?? "unknown",
+        };
+      }
+    } catch {
+      // The lookup only detects a concurrent successful submission. Preserve
+      // the original creation failure when that best-effort check also fails.
     }
-    throw responseError("Version creation", created.response);
+    throw creationError;
   }
   if (created.data?.version !== version) {
     throw new Error(`AMO created version ${JSON.stringify(created.data?.version)} instead of ${version}`);
