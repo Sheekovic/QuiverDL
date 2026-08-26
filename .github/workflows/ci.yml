@@ -196,6 +196,7 @@ jobs:
           node ../../scripts/validate-store-packaging.mjs
           python3 ../../scripts/test-media-helper.py
           node --test ../../scripts/test-package-extensions.mjs
+          node --test ../../scripts/test-submit-firefox-amo.mjs
           node ../../scripts/package-extensions.mjs ../../dist/store
 
   desktop-check:

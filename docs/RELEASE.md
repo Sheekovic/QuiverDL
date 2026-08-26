@@ -23,10 +23,15 @@ follow-up CI, and the reviewed version-tag workflow also requires the dedicated 
 workflow fails early instead of offering a partial fallback.
 
 The same tagged workflow creates deterministic unsigned Chrome Web Store and Firefox AMO submission
-archives. Microsoft Store and strict-confined Snap Store packaging, validation, and owner submission
-commands are documented in [store packaging](STORE_PACKAGING.md). Store accounts and marketplace
-signatures remain owner-controlled release inputs. Mac App Store packaging remains gated on durable
-security-scoped bookmark support for restart-safe destinations.
+archives. When Firefox publication is enabled, a zero-dependency Node client uses AMO API v5 to
+submit the tagged Firefox version to the existing listing. It creates only short-lived,
+single-use JWTs, polls Mozilla's validator before creating the version, and treats an already-present
+version as an idempotent success. Mozilla review still applies; after approval, Firefox distributes
+the listed update automatically. Microsoft Store and
+strict-confined Snap Store packaging, validation, and owner submission commands are documented in
+[store packaging](STORE_PACKAGING.md). Store accounts and marketplace signatures remain
+owner-controlled release inputs. Mac App Store packaging remains gated on durable security-scoped
+bookmark support for restart-safe destinations.
 
 Windows users who install the NSIS or MSI desktop package and want browser integration must also download the matching `native-host-x86_64-pc-windows-msvc.zip`, then run its `extensions/native-host/install-windows.ps1` script against the included signed host. The portable archive already contains the same host and registration assets.
 
@@ -49,6 +54,16 @@ never merges those PRs automatically.
 
 Set the repository variable `ENABLE_SIGNED_RELEASES` to `true` only after those credentials are ready. The signed jobs deliberately fail instead of publishing unsigned Windows or unnotarized macOS release artifacts. Certificates and account credentials cannot be supplied by source code; the repository owner must obtain them from an appropriate certificate authority and Apple Developer account.
 
+For automatic Firefox updates, create a GitHub environment named `firefox-addons` without required
+reviewers, then create AMO API credentials from the Firefox Add-on Developer Hub. Add the JWT issuer
+as the environment secret `AMO_JWT_ISSUER` and the JWT secret as `AMO_JWT_SECRET`; never put either
+value in repository files, workflow inputs, issues, or logs. After both secrets are present, set the
+repository variable `ENABLE_AMO_PUBLISH` to `true`. Each future tagged release then validates the
+stable `quiverdl@quiverdl.app` ID and synchronized version, submits it to the listed AMO channel,
+and exits after Mozilla accepts the submission instead of waiting for review approval. Rejected or
+manually reviewed versions remain visible in the Developer Hub and are not delivered to users until
+Mozilla approves them.
+
 Direct-download update signing is a separate trust root from operating-system code signing. Follow
 the [secure updater design](UPDATER.md): generate and back up the Tauri key offline, add the encrypted
 private key only to the protected release environment, compile the public key into direct builds,
@@ -65,9 +80,11 @@ builds use their marketplace update channel.
    checkout and whose commit is already contained in reviewed `main` history.
 3. Confirm the Linux workflow publishes AppImage, DEB, RPM, native-host, signature, checksum, and
    `latest.json` assets.
-4. Perform a clean-machine Linux launch and AppImage upgrade test, then add any additional
+4. When `ENABLE_AMO_PUBLISH` is enabled, confirm the Firefox submission job reaches Mozilla and
+   check the Developer Hub for its review status.
+5. Perform a clean-machine Linux launch and AppImage upgrade test, then add any additional
    human-readable release notes.
-5. When signed Windows or macOS direct downloads are enabled, inspect their OS signatures,
+6. When signed Windows or macOS direct downloads are enabled, inspect their OS signatures,
    notarization, install/uninstall behavior, extension pairing, and clean-machine tests.
 
 Never test signing with production keys on pull requests or upload certificates as artifacts.
