@@ -15,7 +15,7 @@ use librqbit::{
 };
 use librqbit_bencode::{BencodeValue, BencodeValueBorrowed, from_bytes};
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tauri::{State, ipc::Channel};
 use url::Url;
