@@ -1,6 +1,6 @@
 name: quiverdl
 base: core24
-version: 0.3.0
+version: 0.3.1
 summary: Fast, private, and reliable download manager
 description: |
   QuiverDL is a performance-first open-source download manager with a native
