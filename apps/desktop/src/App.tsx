@@ -268,11 +268,18 @@ const THEME_ACCENTS = [
 ] as const;
 
 function accentInk(color: string) {
-  const red = Number.parseInt(color.slice(1, 3), 16);
-  const green = Number.parseInt(color.slice(3, 5), 16);
-  const blue = Number.parseInt(color.slice(5, 7), 16);
-  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
-  return luminance > 0.56 ? "#071325" : "#ffffff";
+  const linearChannel = (value: number) => {
+    const channel = value / 255;
+    return channel <= 0.04045
+      ? channel / 12.92
+      : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linearChannel(Number.parseInt(color.slice(1, 3), 16))
+    + 0.7152 * linearChannel(Number.parseInt(color.slice(3, 5), 16))
+    + 0.0722 * linearChannel(Number.parseInt(color.slice(5, 7), 16));
+  const blackContrast = (luminance + 0.05) / 0.05;
+  const whiteContrast = 1.05 / (luminance + 0.05);
+  return blackContrast >= whiteContrast ? "#000000" : "#ffffff";
 }
 
 function matchingCategory(
