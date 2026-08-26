@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   isPermissionGranted,
@@ -11,6 +12,7 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { MessageKey, translate } from "./i18n";
+import quiverLogo from "../src-tauri/icons/icon.png";
 
 type LinkInspectionResponse = {
   effectiveUrl: string;
@@ -97,6 +99,7 @@ type CategoryRule = {
 
 type AppSettings = {
   theme: "system" | "light" | "dark";
+  accentColor: string | null;
   language: "en" | "ar";
   notifications: boolean;
   retryAttempts: number;
@@ -225,6 +228,7 @@ const STATUS_LABELS: Record<DownloadStatus, string> = {
 
 const DEFAULT_SETTINGS: AppSettings = {
   theme: "system",
+  accentColor: null,
   language: "en",
   notifications: true,
   retryAttempts: 3,
@@ -253,6 +257,65 @@ const DEFAULT_SETTINGS: AppSettings = {
   ],
   mediaPythonPath: "",
 };
+
+const THEME_ACCENTS = [
+  { name: "Ocean", color: "#62A7FF" },
+  { name: "Cyan", color: "#22C1D6" },
+  { name: "Violet", color: "#9B87F5" },
+  { name: "Emerald", color: "#35C98B" },
+  { name: "Amber", color: "#F4B942" },
+  { name: "Rose", color: "#F06C91" },
+] as const;
+
+function rgbChannels(color: string) {
+  return [
+    Number.parseInt(color.slice(1, 3), 16),
+    Number.parseInt(color.slice(3, 5), 16),
+    Number.parseInt(color.slice(5, 7), 16),
+  ] as const;
+}
+
+function relativeLuminance(color: string) {
+  const linearChannel = (value: number) => {
+    const channel = value / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  };
+  const [red, green, blue] = rgbChannels(color);
+  return 0.2126 * linearChannel(red) + 0.7152 * linearChannel(green) + 0.0722 * linearChannel(blue);
+}
+
+function contrastRatio(first: string, second: string) {
+  const brighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (brighter + 0.05) / (darker + 0.05);
+}
+
+function accentInk(color: string) {
+  const luminance = relativeLuminance(color);
+  const blackContrast = (luminance + 0.05) / 0.05;
+  const whiteContrast = 1.05 / (luminance + 0.05);
+  return blackContrast >= whiteContrast ? "#000000" : "#ffffff";
+}
+
+function mixHex(color: string, target: string, amount: number) {
+  const sourceChannels = rgbChannels(color);
+  const targetChannels = rgbChannels(target);
+  return `#${sourceChannels.map((channel, index) =>
+    Math.round(channel + (targetChannels[index] - channel) * amount)
+      .toString(16)
+      .padStart(2, "0"),
+  ).join("")}`;
+}
+
+function accessibleAccentForeground(color: string, lightTheme: boolean) {
+  const surfaces = lightTheme ? ["#edf3fa", "#f7faff"] : ["#07101f", "#0c1b30"];
+  const target = lightTheme ? "#000000" : "#ffffff";
+  for (let step = 0; step <= 20; step += 1) {
+    const candidate = mixHex(color, target, step / 20);
+    if (surfaces.every((surface) => contrastRatio(candidate, surface) >= 4.5)) return candidate;
+  }
+  return target;
+}
 
 function matchingCategory(
   filename: string,
@@ -665,7 +728,30 @@ function App() {
     document.documentElement.dataset.theme = settings.theme;
     document.documentElement.lang = settings.language;
     document.documentElement.dir = settings.language === "ar" ? "rtl" : "ltr";
-  }, [settings.language, settings.theme]);
+    const preferredLightTheme = window.matchMedia("(prefers-color-scheme: light)");
+    const applyAccent = () => {
+      if (!settings.accentColor) return;
+      const ink = accentInk(settings.accentColor);
+      const hover = mixHex(settings.accentColor, ink === "#000000" ? "#ffffff" : "#000000", 0.12);
+      const lightTheme = settings.theme === "light" || (settings.theme === "system" && preferredLightTheme.matches);
+      document.documentElement.style.setProperty("--user-accent", settings.accentColor);
+      document.documentElement.style.setProperty("--user-accent-ink", ink);
+      document.documentElement.style.setProperty("--user-accent-hover", hover);
+      document.documentElement.style.setProperty("--user-accent-hover-ink", accentInk(hover));
+      document.documentElement.style.setProperty("--user-accent-fg", accessibleAccentForeground(settings.accentColor, lightTheme));
+    };
+    if (settings.accentColor) {
+      applyAccent();
+      preferredLightTheme.addEventListener("change", applyAccent);
+    } else {
+      document.documentElement.style.removeProperty("--user-accent");
+      document.documentElement.style.removeProperty("--user-accent-ink");
+      document.documentElement.style.removeProperty("--user-accent-hover");
+      document.documentElement.style.removeProperty("--user-accent-hover-ink");
+      document.documentElement.style.removeProperty("--user-accent-fg");
+    }
+    return () => preferredLightTheme.removeEventListener("change", applyAccent);
+  }, [settings.accentColor, settings.language, settings.theme]);
 
   useEffect(() => {
     if (!stateReady) return;
@@ -740,6 +826,17 @@ function App() {
 
   function closeSettings() {
     setSettingsOpen(false);
+  }
+
+  function activateSourceMode(mode: SourceMode) {
+    setSourceMode(mode);
+    setFilter("all");
+    setError("");
+    setInspection(null);
+    setMediaInspection(null);
+    setTorrentInspection(null);
+    setReviewingBrowserRequest(null);
+    window.requestAnimationFrame(() => urlInputRef.current?.focus());
   }
 
   useEffect(() => {
@@ -1775,9 +1872,13 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">DL</span>
-          <span>QuiverDL</span>
+        <div
+          className="brand"
+          data-tauri-drag-region
+          onDoubleClick={() => void getCurrentWindow().toggleMaximize()}
+        >
+          <img className="brand-mark" src={quiverLogo} alt="" aria-hidden="true" draggable={false} data-tauri-drag-region />
+          <span data-tauri-drag-region>QuiverDL</span>
         </div>
         <nav aria-label="Download filters">
           <FilterButton active={filter === "all"} count={downloads.length} label={t("downloads")} onClick={() => setFilter("all")} />
@@ -1806,14 +1907,45 @@ function App() {
                 <button type="button" aria-label="Close settings" autoFocus onClick={closeSettings}>×</button>
               </div>
               <div className="settings-panel settings-modal-body">
-          <label>
-            {t("theme")}
-            <select value={settings.theme} onChange={(event) => setSettings((current) => ({ ...current, theme: event.target.value as AppSettings["theme"] }))}>
-              <option value="system">System</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </label>
+          <fieldset className="settings-group theme-settings">
+            <legend>Theme</legend>
+            <label>
+              Mode
+              <select value={settings.theme} onChange={(event) => setSettings((current) => ({ ...current, theme: event.target.value as AppSettings["theme"] }))}>
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+            <span className="setting-label">Accent color</span>
+            <div className="accent-presets" role="group" aria-label="Accent color presets">
+              {THEME_ACCENTS.map((accent) => (
+                <button
+                  className={settings.accentColor?.toUpperCase() === accent.color ? "selected" : undefined}
+                  type="button"
+                  key={accent.color}
+                  aria-label={`${accent.name} accent`}
+                  aria-pressed={settings.accentColor?.toUpperCase() === accent.color}
+                  title={accent.name}
+                  style={{ backgroundColor: accent.color }}
+                  onClick={() => setSettings((current) => ({ ...current, accentColor: accent.color }))}
+                />
+              ))}
+            </div>
+            <div className="accent-custom">
+              <label>
+                Custom
+                <input
+                  type="color"
+                  value={settings.accentColor ?? "#62A7FF"}
+                  onChange={(event) => setSettings((current) => ({ ...current, accentColor: event.target.value.toUpperCase() }))}
+                />
+              </label>
+              <button type="button" onClick={() => setSettings((current) => ({ ...current, accentColor: null }))}>
+                Use theme default
+              </button>
+            </div>
+          </fieldset>
           <label>
             {t("language")}
             <select value={settings.language} onChange={(event) => setSettings((current) => ({ ...current, language: event.target.value as AppSettings["language"] }))}>
@@ -2117,18 +2249,59 @@ function App() {
       </aside>
 
       <main className="workspace">
-        <header>
-          <div>
-            <p className="eyebrow">DOWNLOAD MANAGER</p>
-            <h1>{filter === "all" ? t("downloads") : FILTER_LABELS[filter]}</h1>
+        <header
+          data-tauri-drag-region
+          onDoubleClick={(event) => {
+            if ((event.target as HTMLElement).closest(".window-controls")) return;
+            void getCurrentWindow().toggleMaximize();
+          }}
+        >
+          <div data-tauri-drag-region>
+            <p className="eyebrow" data-tauri-drag-region>DOWNLOAD MANAGER</p>
+            <h1 data-tauri-drag-region>{filter === "all" ? t("downloads") : FILTER_LABELS[filter]}</h1>
           </div>
-          <span className="engine-badge"><i /> Engine ready</span>
+          <div className="header-actions">
+            <span className="engine-badge"><i /> Engine ready</span>
+            <div className="window-controls">
+              <button type="button" aria-label="Minimize QuiverDL" onClick={() => void getCurrentWindow().minimize()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M2 6.5h8" /></svg>
+              </button>
+              <button type="button" aria-label="Maximize or restore QuiverDL" onClick={() => void getCurrentWindow().toggleMaximize()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><rect x="2.25" y="2.25" width="7.5" height="7.5" rx=".4" /></svg>
+              </button>
+              <button className="window-close" type="button" aria-label="Close QuiverDL" onClick={() => void getCurrentWindow().close()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="m2.5 2.5 7 7m0-7-7 7" /></svg>
+              </button>
+            </div>
+          </div>
         </header>
         <div className="action-toolbar" role="toolbar" aria-label="Download actions">
-          <button className="toolbar-primary" type="button" onClick={() => { setSourceMode("auto"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>+ Add URL</button>
-          <button type="button" aria-pressed={sourceMode === "media"} onClick={() => { setSourceMode("media"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>Media</button>
-          <button type="button" aria-pressed={sourceMode === "torrent"} onClick={() => { setSourceMode("torrent"); setInspection(null); setMediaInspection(null); setTorrentInspection(null); urlInputRef.current?.focus(); }}>Torrent / Magnet</button>
           <button
+            className={!settingsOpen && filter !== "completed" && sourceMode === "auto" ? "toolbar-primary" : undefined}
+            type="button"
+            aria-pressed={!settingsOpen && filter !== "completed" && sourceMode === "auto"}
+            onClick={() => activateSourceMode("auto")}
+          >
+            + Add URL
+          </button>
+          <button
+            className={!settingsOpen && filter !== "completed" && sourceMode === "media" ? "toolbar-primary" : undefined}
+            type="button"
+            aria-pressed={!settingsOpen && filter !== "completed" && sourceMode === "media"}
+            onClick={() => activateSourceMode("media")}
+          >
+            Media
+          </button>
+          <button
+            className={!settingsOpen && filter !== "completed" && sourceMode === "torrent" ? "toolbar-primary" : undefined}
+            type="button"
+            aria-pressed={!settingsOpen && filter !== "completed" && sourceMode === "torrent"}
+            onClick={() => activateSourceMode("torrent")}
+          >
+            Torrent / Magnet
+          </button>
+          <button
+            className={settings.clipboardMonitoring ? "toolbar-toggle-active" : undefined}
             type="button"
             aria-pressed={settings.clipboardMonitoring}
             onClick={() => setSettings((current) => ({
@@ -2138,8 +2311,25 @@ function App() {
           >
             Clipboard {settings.clipboardMonitoring ? "on" : "off"}
           </button>
-          <button type="button" onClick={() => setFilter("completed")}>History</button>
-          <button type="button" onClick={(event) => openSettings(event.currentTarget)}>Settings</button>
+          <button
+            className={!settingsOpen && filter === "completed" ? "toolbar-primary" : undefined}
+            type="button"
+            aria-pressed={!settingsOpen && filter === "completed"}
+            onClick={() => {
+              setFilter("completed");
+              setError("");
+            }}
+          >
+            History
+          </button>
+          <button
+            className={settingsOpen ? "toolbar-primary" : undefined}
+            type="button"
+            aria-pressed={settingsOpen}
+            onClick={(event) => openSettings(event.currentTarget)}
+          >
+            Settings
+          </button>
         </div>
 
         {UPDATER_ENABLED && availableUpdateVersion && (
@@ -2375,7 +2565,7 @@ function App() {
           )}
           {visibleDownloads.length === 0 ? (
             <div className="empty-state">
-              <div className="target-icon" aria-hidden="true"><span>DL</span></div>
+              <div className="target-icon" aria-hidden="true"><img src={quiverLogo} alt="" draggable={false} /></div>
               <h3>{filter === "completed" ? t("noHistory") : downloads.length === 0 ? t("empty") : "Nothing in this view"}</h3>
               <p>
                 {filter === "completed"

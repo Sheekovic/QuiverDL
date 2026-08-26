@@ -102,6 +102,11 @@ assert.equal(updaterCapabilities.permissions.includes("updater:default"), true);
 assert.equal(updaterCapabilities.permissions.includes("process:allow-restart"), true);
 assert.match(rustBoundary, /begin_update_install_guard/);
 assert.match(rustBoundary, /tauri_plugin_updater::Builder::new\(\)\.build\(\)/);
+assert.match(
+  rustBoundary,
+  /config\(\)[\s\S]*?plugins[\s\S]*?get\("updater"\)[\s\S]*?is_some_and\(\|config\| !config\.is_null\(\)\)/,
+  "The updater plugin must only initialize when a non-null updater configuration is present",
+);
 assert.match(releaseWorkflow, /environment: release/);
 assert.match(releaseWorkflow, /VITE_QUIVERDL_UPDATER: "true"/);
 assert.match(releaseWorkflow, /--config src-tauri\/tauri\.updater\.conf\.json/);

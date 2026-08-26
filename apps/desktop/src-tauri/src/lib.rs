@@ -829,7 +829,14 @@ fn sanitize_filename(value: Option<&str>) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let context = tauri::generate_context!();
+    let updater_configured = context
+        .config()
+        .plugins
+        .0
+        .get("updater")
+        .is_some_and(|config| !config.is_null());
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
             |app, _arguments, _working_directory| {
                 if let Some(window) = app.get_webview_window("main") {
@@ -839,8 +846,13 @@ pub fn run() {
             },
         ))
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init());
+    let builder = if updater_configured {
+        builder.plugin(tauri_plugin_updater::Builder::new().build())
+    } else {
+        builder
+    };
+    builder
         .manage(TransferRegistry::default())
         .manage(ClipboardMonitor::default())
         .manage(MediaRegistry::default())
@@ -913,7 +925,7 @@ pub fn run() {
             cancel_update_install,
             quit_app
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
