@@ -140,6 +140,16 @@ assert.match(
   /test "\$\(git -C \.release-tools rev-parse HEAD\)" = "\$WORKFLOW_COMMIT"/,
 );
 assert.match(releaseWorkflow, /manifest_script="\.release-tools\/scripts\/generate-update-manifest\.mjs"/);
+assert.match(
+  releaseWorkflow,
+  /firefox-addon:[\s\S]*?WORKFLOW_COMMIT: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?name: Check out reviewed AMO recovery tooling[\s\S]*?ref: \$\{\{ needs\.preflight\.outputs\.workflow_commit \}\}[\s\S]*?path: \.amo-release-tools[\s\S]*?persist-credentials: false/,
+  "manual AMO retries must use reviewed recovery tooling",
+);
+assert.match(
+  releaseWorkflow,
+  /firefox-addon:[\s\S]*?submit_script="scripts\/submit-firefox-amo\.mjs"[\s\S]*?if test "\$GITHUB_EVENT_NAME" = "workflow_dispatch"; then[\s\S]*?test "\$\(git -C \.amo-release-tools rev-parse HEAD\)" = "\$WORKFLOW_COMMIT"[\s\S]*?submit_script="\.amo-release-tools\/scripts\/submit-firefox-amo\.mjs"/,
+  "manual AMO retries must execute the reviewed submission client",
+);
 assert.ok(
   releaseWorkflow.indexOf("name: Require an annotated tag on reviewed main history")
     < releaseWorkflow.indexOf("uses: actions/setup-node"),

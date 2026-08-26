@@ -61,6 +61,7 @@ test("an existing AMO version makes release submission idempotent", async () => 
   assert.equal(calls.length, 1);
   assert.match(calls[0].url, /quiverdl%40quiverdl\.app\/versions\/v1\.2\.3\/$/);
   assert.match(calls[0].options.headers.Authorization, /^JWT /);
+  assert.equal(calls[0].options.redirect, "error");
   assert.doesNotMatch(calls[0].options.headers.Authorization, new RegExp(secret));
 });
 
@@ -126,6 +127,40 @@ test("AMO non-JSON response bodies are never copied into release logs", async ()
       return true;
     },
   );
+});
+
+test("the validation timeout reports the configured polling duration", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "quiverdl-amo-timeout-test-"));
+  const archivePath = path.join(temporary, "quiverdl-firefox-1.2.3.zip");
+  await writeFile(archivePath, Buffer.from("timeout test archive"));
+  let calls = 0;
+  try {
+    await assert.rejects(
+      submitFirefoxUpdate({
+        archivePath,
+        manifest,
+        releaseTag: "v1.2.3",
+        releaseCommit,
+        issuer,
+        secret,
+        pollIntervalMs: 10,
+        maxPolls: 2,
+        sleep: async () => {},
+        fetchImpl: async () => {
+          calls += 1;
+          if (calls === 1) return jsonResponse(404, { detail: "Not found." });
+          if (calls === 2) {
+            return jsonResponse(201, { uuid: "slow-upload", processed: false, version: "1.2.3" });
+          }
+          return jsonResponse(200, { uuid: "slow-upload", processed: false, version: "1.2.3" });
+        },
+      }),
+      /Mozilla did not finish validating the package within 20 milliseconds/,
+    );
+    assert.equal(calls, 4);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("a new listed package is validated before its version is created", async () => {

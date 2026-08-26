@@ -1,7 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 const API_BASE = "https://addons.mozilla.org/api/v5/";
 const ADDON_ID = "quiverdl@quiverdl.app";
@@ -44,6 +44,7 @@ async function amoRequest({ fetchImpl, issuer, secret, pathname, method = "GET",
   const response = await fetchImpl(new URL(pathname, API_BASE), {
     method,
     body,
+    redirect: "error",
     signal: AbortSignal.timeout(60_000),
     headers: { Authorization: authorization, Accept: "application/json", ...headers },
   });
@@ -77,6 +78,19 @@ function validationSummary(upload) {
   return errorCount > 0
     ? `${errorCount} validator error${errorCount === 1 ? "" : "s"}; inspect the AMO Developer Hub`
     : "the validator rejected the package; inspect the AMO Developer Hub";
+}
+
+function durationLabel(milliseconds) {
+  for (const [unitMilliseconds, unit] of [
+    [60_000, "minute"],
+    [1_000, "second"],
+  ]) {
+    if (milliseconds >= unitMilliseconds && milliseconds % unitMilliseconds === 0) {
+      const count = milliseconds / unitMilliseconds;
+      return `${count} ${unit}${count === 1 ? "" : "s"}`;
+    }
+  }
+  return `${milliseconds} millisecond${milliseconds === 1 ? "" : "s"}`;
 }
 
 export async function submitFirefoxUpdate({
@@ -133,7 +147,11 @@ export async function submitFirefoxUpdate({
     if (!polled.response.ok) throw responseError("Upload validation lookup", polled.response);
     upload = polled.data;
   }
-  if (!upload?.processed) throw new Error("Mozilla did not finish validating the package within ten minutes");
+  if (!upload?.processed) {
+    throw new Error(
+      `Mozilla did not finish validating the package within ${durationLabel(maxPolls * pollIntervalMs)}`,
+    );
+  }
   if (!upload.valid) throw new Error(`Mozilla rejected the package: ${validationSummary(upload)}`);
   if (upload.version !== version) {
     throw new Error(`Mozilla validated version ${JSON.stringify(upload.version)} instead of ${version}`);
@@ -180,7 +198,9 @@ export async function submitFirefoxUpdate({
 }
 
 async function main() {
-  const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  // Recovery runs may execute a reviewed newer client from a secondary checkout,
+  // while the working directory remains the immutable tagged release source.
+  const repository = process.cwd();
   const archivePath = path.resolve(process.argv[2] ?? "");
   if (!process.argv[2]) throw new Error("Usage: node scripts/submit-firefox-amo.mjs <extension.zip>");
   const manifest = JSON.parse(

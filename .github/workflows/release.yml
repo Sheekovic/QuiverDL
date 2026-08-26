@@ -637,8 +637,7 @@ jobs:
       contents: read
     env:
       RELEASE_COMMIT: ${{ needs.preflight.outputs.release_commit }}
-      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
-      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      WORKFLOW_COMMIT: ${{ needs.preflight.outputs.workflow_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -653,22 +652,47 @@ jobs:
           version="$(node -p "require('./extensions/firefox/manifest.json').version")"
           test "$RELEASE_TAG" = "v$version"
           test "$(node -p "require('./extensions/firefox/manifest.json').browser_specific_settings.gecko.id")" = "quiverdl@quiverdl.app"
+      - name: Check out reviewed AMO recovery tooling
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.workflow_commit }}
+          path: .amo-release-tools
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
       - name: Require protected AMO API credentials
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         shell: bash
         run: |
           test -n "$AMO_JWT_ISSUER"
           test -n "$AMO_JWT_SECRET"
           [[ "$AMO_JWT_ISSUER" =~ ^user:[0-9]+:[0-9]+$ ]]
       - name: Package and test the exact Firefox source
+        shell: bash
         run: |
+          test_script="scripts/test-submit-firefox-amo.mjs"
+          if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
+            test "$(git -C .amo-release-tools rev-parse HEAD)" = "$WORKFLOW_COMMIT"
+            test_script=".amo-release-tools/scripts/test-submit-firefox-amo.mjs"
+          fi
           node scripts/validate-store-packaging.mjs
           node --test scripts/test-package-extensions.mjs
-          node --test scripts/test-submit-firefox-amo.mjs
+          node --test "$test_script"
           node scripts/package-extensions.mjs dist/store
       - name: Submit the listed update to Mozilla Add-ons
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        shell: bash
         run: |
           version="$(node -p "require('./extensions/firefox/manifest.json').version")"
-          node scripts/submit-firefox-amo.mjs "dist/store/quiverdl-firefox-$version.zip"
+          submit_script="scripts/submit-firefox-amo.mjs"
+          if test "$GITHUB_EVENT_NAME" = "workflow_dispatch"; then
+            test "$(git -C .amo-release-tools rev-parse HEAD)" = "$WORKFLOW_COMMIT"
+            submit_script=".amo-release-tools/scripts/submit-firefox-amo.mjs"
+          fi
+          node "$submit_script" "dist/store/quiverdl-firefox-$version.zip"
