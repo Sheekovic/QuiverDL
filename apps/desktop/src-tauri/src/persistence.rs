@@ -33,6 +33,7 @@ impl PersistentStore {
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct AppSettings {
     pub theme: String,
+    pub accent_color: Option<String>,
     pub language: String,
     pub notifications: bool,
     pub retry_attempts: u32,
@@ -112,6 +113,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             theme: "system".into(),
+            accent_color: None,
             language: "en".into(),
             notifications: true,
             retry_attempts: 3,
@@ -140,6 +142,13 @@ impl AppSettings {
     pub(crate) fn validate(&self) -> Result<(), String> {
         if !matches!(self.theme.as_str(), "system" | "light" | "dark") {
             return Err("Unsupported theme setting".into());
+        }
+        if self.accent_color.as_ref().is_some_and(|color| {
+            color.len() != 7
+                || !color.starts_with('#')
+                || !color[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            return Err("The custom accent color must use #RRGGBB format".into());
         }
         if !matches!(self.language.as_str(), "en" | "ar") {
             return Err("Unsupported language setting".into());
@@ -687,10 +696,24 @@ mod tests {
         snapshot.validate().expect("default snapshot is valid");
         assert!(snapshot.settings.notifications);
         assert_eq!(snapshot.settings.theme, "system");
+        assert_eq!(snapshot.settings.accent_color, None);
         assert_eq!(snapshot.settings.proxy_mode, "disabled");
         assert_eq!(snapshot.settings.queue_mode, "parallel");
         assert_eq!(snapshot.settings.history_retention_days, None);
         assert_eq!(snapshot.downloads.len(), 0);
+    }
+
+    #[test]
+    fn validates_custom_accent_colors() {
+        let mut settings = AppSettings {
+            accent_color: Some("#9B87F5".into()),
+            ..AppSettings::default()
+        };
+        settings.validate().expect("a hexadecimal accent is valid");
+        for invalid in ["9B87F5", "#FFF", "#GG87F5", "#9B87F500"] {
+            settings.accent_color = Some(invalid.into());
+            assert!(settings.validate().is_err(), "{invalid} must be rejected");
+        }
     }
 
     #[test]
