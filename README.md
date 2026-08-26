@@ -7,6 +7,7 @@
 [![Contributions welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Get it from Microsoft](https://img.shields.io/badge/Get_it_from-Microsoft_Store-0078D4?logo=microsoft&logoColor=white)](https://apps.microsoft.com/detail/9MVB2DD54NF4)
 [![GitHub release](https://img.shields.io/github/v/release/Sheekovic/QuiverDL?label=Linux)](https://github.com/Sheekovic/QuiverDL/releases/latest)
+[![Sponsor QuiverDL](https://img.shields.io/badge/Sponsor-QuiverDL-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Sheekovic)
 
 [Website](https://sheekovic.github.io/QuiverDL/) ·
 [Microsoft Store](https://apps.microsoft.com/detail/9MVB2DD54NF4) ·
@@ -102,6 +103,13 @@ QuiverDL is being designed in public, and contributions of every size are welcom
 
 You do not need to be a Rust expert. Documentation, accessibility, tests, design feedback, and
 careful bug reports are valuable contributions.
+
+## Support QuiverDL
+
+If QuiverDL saves you time, consider supporting its continued development through
+[GitHub Sponsors](https://github.com/sponsors/Sheekovic). Sponsorship helps cover code-signing,
+release infrastructure, Store publishing, and cross-platform testing. QuiverDL remains
+GPL-licensed, privacy-respecting, and open to contributions from everyone.
 
 ## Repository layout
 
