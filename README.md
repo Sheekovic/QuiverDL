@@ -106,8 +106,8 @@ careful bug reports are valuable contributions.
 
 ## Support QuiverDL
 
-If QuiverDL saves you time, consider [sponsoring its continued
-development](https://github.com/sponsors/Sheekovic). Sponsorship helps cover code-signing,
+If QuiverDL saves you time, consider supporting its continued development through
+[GitHub Sponsors](https://github.com/sponsors/Sheekovic). Sponsorship helps cover code-signing,
 release infrastructure, Store publishing, and cross-platform testing. QuiverDL remains
 GPL-licensed, privacy-respecting, and open to contributions from everyone.
 
