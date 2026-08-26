@@ -164,6 +164,11 @@ assert.match(
   /windows-portable:[\s\S]*?python\/quiver_media\.py[\s\S]*?gh release upload/,
   "the unsigned Windows portable archive must include the media helper",
 );
+assert.equal(
+  (releaseWorkflow.match(/apps\/desktop\/src-tauri\/python\/quiver_media\.py/g) ?? []).length,
+  2,
+  "both unsigned and signed portable archives must copy the tracked media helper",
+);
 assert.match(
   releaseWorkflow,
   /publish-linux:[\s\S]*?- windows-portable[\s\S]*?needs\.windows-portable\.result == 'success'/,

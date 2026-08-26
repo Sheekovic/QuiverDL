@@ -342,7 +342,7 @@ jobs:
           $binaryRoot = "target/$env:WINDOWS_TARGET/release"
           $desktop = Join-Path $binaryRoot 'quiver-desktop.exe'
           $nativeHost = Join-Path $binaryRoot 'quiver-native-host.exe'
-          $mediaHelper = Join-Path $binaryRoot 'python/quiver_media.py'
+          $mediaHelper = 'apps/desktop/src-tauri/python/quiver_media.py'
           foreach ($required in @($desktop, $nativeHost, $mediaHelper, 'LICENSE', 'README.md', 'extensions')) {
             if (-not (Test-Path -LiteralPath $required)) { throw "Portable archive input is missing: $required" }
           }
@@ -522,7 +522,7 @@ jobs:
           $pythonStage = Join-Path $stage "python"
           New-Item -ItemType Directory -Force -Path $pythonStage | Out-Null
           Copy-Item target/${{ matrix.target }}/release/quiver-desktop.exe, target/${{ matrix.target }}/release/quiver-native-host.exe, LICENSE, README.md -Destination $stage
-          $mediaHelper = "target/${{ matrix.target }}/release/python/quiver_media.py"
+          $mediaHelper = "apps/desktop/src-tauri/python/quiver_media.py"
           if (-not (Test-Path -LiteralPath $mediaHelper -PathType Leaf)) { throw "Portable media helper is missing" }
           Copy-Item -LiteralPath $mediaHelper -Destination $pythonStage
           Copy-Item extensions -Destination $stage -Recurse
