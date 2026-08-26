@@ -96,7 +96,11 @@ try {
     $resourceRoot = [IO.Path]::GetFullPath($tauriDirectory)
     $resourceRootPrefix = $resourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $packagedResources = @()
-    foreach ($resourceEntry in @($tauriConfig.bundle.resources)) {
+    $resourceEntries = @()
+    if ($null -ne $tauriConfig.bundle -and $null -ne $tauriConfig.bundle.resources) {
+        $resourceEntries = @($tauriConfig.bundle.resources)
+    }
+    foreach ($resourceEntry in $resourceEntries) {
         if ($resourceEntry -isnot [string] -or [string]::IsNullOrWhiteSpace($resourceEntry)) {
             throw 'MSIX packaging only supports non-empty file resource paths.'
         }

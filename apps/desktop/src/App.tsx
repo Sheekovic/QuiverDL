@@ -267,19 +267,54 @@ const THEME_ACCENTS = [
   { name: "Rose", color: "#F06C91" },
 ] as const;
 
-function accentInk(color: string) {
+function rgbChannels(color: string) {
+  return [
+    Number.parseInt(color.slice(1, 3), 16),
+    Number.parseInt(color.slice(3, 5), 16),
+    Number.parseInt(color.slice(5, 7), 16),
+  ] as const;
+}
+
+function relativeLuminance(color: string) {
   const linearChannel = (value: number) => {
     const channel = value / 255;
-    return channel <= 0.04045
-      ? channel / 12.92
-      : ((channel + 0.055) / 1.055) ** 2.4;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
   };
-  const luminance = 0.2126 * linearChannel(Number.parseInt(color.slice(1, 3), 16))
-    + 0.7152 * linearChannel(Number.parseInt(color.slice(3, 5), 16))
-    + 0.0722 * linearChannel(Number.parseInt(color.slice(5, 7), 16));
+  const [red, green, blue] = rgbChannels(color);
+  return 0.2126 * linearChannel(red) + 0.7152 * linearChannel(green) + 0.0722 * linearChannel(blue);
+}
+
+function contrastRatio(first: string, second: string) {
+  const brighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (brighter + 0.05) / (darker + 0.05);
+}
+
+function accentInk(color: string) {
+  const luminance = relativeLuminance(color);
   const blackContrast = (luminance + 0.05) / 0.05;
   const whiteContrast = 1.05 / (luminance + 0.05);
   return blackContrast >= whiteContrast ? "#000000" : "#ffffff";
+}
+
+function mixHex(color: string, target: string, amount: number) {
+  const sourceChannels = rgbChannels(color);
+  const targetChannels = rgbChannels(target);
+  return `#${sourceChannels.map((channel, index) =>
+    Math.round(channel + (targetChannels[index] - channel) * amount)
+      .toString(16)
+      .padStart(2, "0"),
+  ).join("")}`;
+}
+
+function accessibleAccentForeground(color: string, lightTheme: boolean) {
+  const surfaces = lightTheme ? ["#edf3fa", "#f7faff"] : ["#07101f", "#0c1b30"];
+  const target = lightTheme ? "#000000" : "#ffffff";
+  for (let step = 0; step <= 20; step += 1) {
+    const candidate = mixHex(color, target, step / 20);
+    if (surfaces.every((surface) => contrastRatio(candidate, surface) >= 4.5)) return candidate;
+  }
+  return target;
 }
 
 function matchingCategory(
@@ -693,13 +728,29 @@ function App() {
     document.documentElement.dataset.theme = settings.theme;
     document.documentElement.lang = settings.language;
     document.documentElement.dir = settings.language === "ar" ? "rtl" : "ltr";
-    if (settings.accentColor) {
+    const preferredLightTheme = window.matchMedia("(prefers-color-scheme: light)");
+    const applyAccent = () => {
+      if (!settings.accentColor) return;
+      const ink = accentInk(settings.accentColor);
+      const hover = mixHex(settings.accentColor, ink === "#000000" ? "#ffffff" : "#000000", 0.12);
+      const lightTheme = settings.theme === "light" || (settings.theme === "system" && preferredLightTheme.matches);
       document.documentElement.style.setProperty("--user-accent", settings.accentColor);
-      document.documentElement.style.setProperty("--user-accent-ink", accentInk(settings.accentColor));
+      document.documentElement.style.setProperty("--user-accent-ink", ink);
+      document.documentElement.style.setProperty("--user-accent-hover", hover);
+      document.documentElement.style.setProperty("--user-accent-hover-ink", accentInk(hover));
+      document.documentElement.style.setProperty("--user-accent-fg", accessibleAccentForeground(settings.accentColor, lightTheme));
+    };
+    if (settings.accentColor) {
+      applyAccent();
+      preferredLightTheme.addEventListener("change", applyAccent);
     } else {
       document.documentElement.style.removeProperty("--user-accent");
       document.documentElement.style.removeProperty("--user-accent-ink");
+      document.documentElement.style.removeProperty("--user-accent-hover");
+      document.documentElement.style.removeProperty("--user-accent-hover-ink");
+      document.documentElement.style.removeProperty("--user-accent-fg");
     }
+    return () => preferredLightTheme.removeEventListener("change", applyAccent);
   }, [settings.accentColor, settings.language, settings.theme]);
 
   useEffect(() => {

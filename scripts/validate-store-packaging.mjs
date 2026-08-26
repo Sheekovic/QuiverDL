@@ -135,7 +135,7 @@ assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
 assert.match(
   msixPackager,
-  /foreach \(\$resourceEntry in @\(\$tauriConfig\.bundle\.resources\)\)/,
+  /\$resourceEntries = @\(\)[\s\S]*?\$null -ne \$tauriConfig\.bundle\.resources[\s\S]*?foreach \(\$resourceEntry in \$resourceEntries\)/,
   "Microsoft Store packaging must include every configured Tauri resource",
 );
 assert.match(
