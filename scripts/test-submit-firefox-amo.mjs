@@ -64,6 +64,27 @@ test("an existing AMO version makes release submission idempotent", async () => 
   assert.doesNotMatch(calls[0].options.headers.Authorization, new RegExp(secret));
 });
 
+test("the AMO version prefix keeps a dotless manifest version from becoming a database ID", async () => {
+  let requestedUrl;
+  const result = await submitFirefoxUpdate({
+    archivePath: "not-read-when-version-exists.zip",
+    manifest: {
+      ...manifest,
+      version: "1",
+    },
+    releaseTag: "v1",
+    releaseCommit,
+    issuer,
+    secret,
+    fetchImpl: async (url) => {
+      requestedUrl = String(url);
+      return jsonResponse(200, { version: "1", file: { status: "unreviewed" } });
+    },
+  });
+  assert.equal(result.version, "1");
+  assert.match(requestedUrl, /versions\/v1\/$/);
+});
+
 test("a new listed package is validated before its version is created", async () => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "quiverdl-amo-test-"));
   const archivePath = path.join(temporary, "quiverdl-firefox-1.2.3.zip");

@@ -54,6 +54,8 @@ async function amoRequest({ fetchImpl, issuer, secret, pathname, method = "GET",
 }
 
 function versionPath(addonId, version) {
+  // AMO documents the `v` prefix as the unambiguous way to address a version
+  // number; without it, a dotless version such as `1` is interpreted as an ID.
   return `addons/addon/${encodeURIComponent(addonId)}/versions/v${encodeURIComponent(version)}/`;
 }
 

@@ -156,7 +156,7 @@ assert.equal(
 );
 assert.equal(
   (releaseWorkflow.match(/ref: \$\{\{ needs\.preflight\.outputs\.release_commit \}\}/g) ?? []).length,
-  4,
+  5,
   "every publishing checkout must pin the commit validated by preflight",
 );
 assert.match(
