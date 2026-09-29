@@ -10,7 +10,7 @@ authors = ["QuiverDL contributors"]
 
 [workspace.dependencies]
 futures-util = "0.3"
-dirs = "6"
+dirs = "7"
 hex = "0.4"
 keyring = "4.1"
 percent-encoding = "2"
