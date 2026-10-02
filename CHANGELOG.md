@@ -2,6 +2,13 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.4.1](https://github.com/Sheekovic/QuiverDL/compare/v0.4.0...v0.4.1) (2026-10-02)
+
+
+### Bug Fixes
+
+* recover Store submissions with complete desktop integration ([#61](https://github.com/Sheekovic/QuiverDL/issues/61)) ([f913bf8](https://github.com/Sheekovic/QuiverDL/commit/f913bf824e30238685e4cd8d2c06abfcc92c2a08))
+
 ## [0.4.0](https://github.com/Sheekovic/QuiverDL/compare/v0.3.1...v0.4.0) (2026-10-02)
 
 
