@@ -137,6 +137,13 @@ assert.match(msixManifest, /Version="\{\{VERSION\}\}"/);
 assert.match(msixManifest, /ProcessorArchitecture="x64"/);
 assert.match(msixManifest, /MinVersion="10\.0\.22000\.0"/);
 assert.match(msixManifest, /<rescap:Capability Name="runFullTrust" \/>/);
+assert.match(msixManifest, /<uap:FileType>\.torrent<\/uap:FileType>/);
+assert.match(msixManifest, /<uap3:Protocol Name="magnet" Parameters="&quot;%1&quot;"/);
+assert.match(msixManifest, /<rescap:Capability Name="unvirtualizedResources" \/>/);
+assert.ok(msixManifest.includes('$(KnownFolder:RoamingAppData)\\QuiverDL'));
+assert.ok(msixManifest.includes('HKEY_CURRENT_USER\\Software\\Mozilla\\NativeMessagingHosts\\app.quiverdl.native'));
+assert.match(msixPackager, /Required browser companion helper not found:/);
+assert.match(msixPackager, /RelativePath = 'quiver-native-host\.exe'/);
 assert.match(
   msixPackager,
   /\$resourceEntries = @\(\)[\s\S]*?\$null -ne \$tauriConfig\.bundle\.resources[\s\S]*?foreach \(\$resourceEntry in \$resourceEntries\)/,
