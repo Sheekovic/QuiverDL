@@ -2,6 +2,13 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.4.0](https://github.com/Sheekovic/QuiverDL/compare/v0.3.1...v0.4.0) (2026-10-02)
+
+
+### Features
+
+* simplify Firefox downloads, torrent management, and desktop navigation ([#59](https://github.com/Sheekovic/QuiverDL/issues/59)) ([9f26a0c](https://github.com/Sheekovic/QuiverDL/commit/9f26a0c5ae1ac4accca5008284248b97a1fdda1e))
+
 ## [0.3.1](https://github.com/Sheekovic/QuiverDL/compare/v0.3.0...v0.3.1) (2026-08-26)
 
 
