@@ -1,16 +1,21 @@
 [CmdletBinding()]
 param(
+    [string] $RepositoryRoot,
     [string] $ExecutablePath,
     [string] $OutputDirectory,
     [switch] $SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
-$repository = Split-Path -Parent $PSScriptRoot
+$packagingRepository = Split-Path -Parent $PSScriptRoot
+$repository = $packagingRepository
+if ($RepositoryRoot) {
+    $repository = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+}
 $desktopDirectory = Join-Path $repository 'apps\desktop'
 $tauriDirectory = Join-Path $desktopDirectory 'src-tauri'
 $tauriConfigPath = Join-Path $tauriDirectory 'tauri.conf.json'
-$manifestTemplatePath = Join-Path $repository 'packaging\windows\msix\AppxManifest.xml.template'
+$manifestTemplatePath = Join-Path $packagingRepository 'packaging\windows\msix\AppxManifest.xml.template'
 $iconDirectory = Join-Path $desktopDirectory 'src-tauri\icons'
 
 if (-not $OutputDirectory) {
@@ -42,6 +47,10 @@ if (-not $ExecutablePath) {
 }
 if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
     throw "Desktop executable not found: $ExecutablePath"
+}
+$nativeHostPath = Join-Path (Split-Path -Parent $ExecutablePath) 'quiver-native-host.exe'
+if (-not (Test-Path -LiteralPath $nativeHostPath -PathType Leaf)) {
+    throw "Required browser companion helper not found: $nativeHostPath"
 }
 if (-not (Test-Path -LiteralPath $manifestTemplatePath -PathType Leaf)) {
     throw "MSIX manifest template not found: $manifestTemplatePath"
@@ -95,7 +104,11 @@ try {
 
     $resourceRoot = [IO.Path]::GetFullPath($tauriDirectory)
     $resourceRootPrefix = $resourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    $packagedResources = @()
+    Copy-Item -LiteralPath $nativeHostPath -Destination (Join-Path $stageDirectory 'quiver-native-host.exe')
+    $packagedResources = @([pscustomobject]@{
+        RelativePath = 'quiver-native-host.exe'
+        SourcePath = $nativeHostPath
+    })
     $resourceEntries = @()
     if ($null -ne $tauriConfig.bundle -and $null -ne $tauriConfig.bundle.resources) {
         $resourceEntries = @($tauriConfig.bundle.resources)

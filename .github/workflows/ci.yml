@@ -284,6 +284,18 @@ jobs:
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
           $packageOutput = Join-Path $env:RUNNER_TEMP 'quiverdl-store-smoke'
+          $missingHelperFixture = Join-Path $env:RUNNER_TEMP 'quiverdl-missing-helper'
+          New-Item -ItemType Directory -Path $missingHelperFixture -Force | Out-Null
+          $fixtureExecutable = Join-Path $missingHelperFixture 'quiver-desktop.exe'
+          Copy-Item -LiteralPath $executable -Destination $fixtureExecutable
+          $rejectedMissingHelper = $false
+          try {
+            .\scripts\package-msix.ps1 -ExecutablePath $fixtureExecutable -OutputDirectory $packageOutput -SkipBuild
+          } catch {
+            if ($_.Exception.Message -notlike 'Required browser companion helper not found:*') { throw }
+            $rejectedMissingHelper = $true
+          }
+          if (-not $rejectedMissingHelper) { throw 'MSIX packaging accepted an incomplete desktop installation.' }
           .\scripts\package-msix.ps1 `
             -ExecutablePath $executable `
             -OutputDirectory $packageOutput `

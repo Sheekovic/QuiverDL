@@ -134,3 +134,22 @@ hash against the draft release; test a clean install and an upgrade from the pre
 version; and retain the marketplace review result. A rejected or unsigned artifact never replaces a
 working direct-download release. The tagged workflow also rejects a tag whose normalized version
 does not exactly match the validated desktop and extension versions.
+# Packaging recovery and desktop integration
+
+Manual Store runs on `main` build application code from the validated immutable release
+tag, and use the packaging script and MSIX manifest from the immutable workflow commit.
+This allows a packaging-only correction without changing an already published release tag.
+The packager requires `quiver-native-host.exe` beside the desktop executable and checks
+both the helper and configured resources by SHA-256 after unpacking the MSIX.
+
+The Store manifest declares `.torrent` and `magnet:` handlers with quoted command-line
+arguments. On Windows 11, narrowly scoped virtualization exclusions expose only
+`%APPDATA%\QuiverDL` and QuiverDL's Firefox native-messaging registration key to external
+processes. Firefox's helper needs these shared files to discover and authenticate to the
+running desktop app. The `unvirtualizedResources` capability is required for those
+exclusions; the rest of HKCU and AppData remain virtualized. These shared integration
+files and the registration can persist after uninstall. This capability's certification
+justification is interoperability with the user-installed Firefox browser companion,
+not unrestricted registry or filesystem access.
+
+Reference: https://learn.microsoft.com/windows/msix/desktop/flexible-virtualization

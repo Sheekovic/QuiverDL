@@ -69,6 +69,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.release_commit }}
+      - name: Check out pinned packaging recovery tools
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A manual recovery uses the reviewed main commit that started this run.
+          # The application itself remains pinned to the validated release tag.
+          ref: ${{ github.sha }}
+          path: .store-release-tools
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
@@ -82,7 +90,7 @@ jobs:
         run: node scripts/validate-store-packaging.mjs
       - name: Build and validate unsigned Store package
         shell: powershell
-        run: .\scripts\package-msix.ps1 -OutputDirectory $env:RUNNER_TEMP\store
+        run: .\.store-release-tools\scripts\package-msix.ps1 -RepositoryRoot $env:GITHUB_WORKSPACE -OutputDirectory $env:RUNNER_TEMP\store
       - name: Record the package checksum
         shell: pwsh
         run: |
