@@ -413,8 +413,13 @@ pub(crate) async fn preview_magnet_files(
     let source = validate_torrent_source(&source)?;
     let control = quiver_core::DownloadControl::default();
     let trackers = validate_magnet_trackers(&source)?;
-    let approved = resolve_tracker_addresses(&trackers, &control).await?;
-    let peers = fetch_tracker_peers(&source, &approved, &control).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let peers = tokio::time::timeout_at(deadline, async {
+        let approved = resolve_tracker_addresses(&trackers, &control).await?;
+        fetch_tracker_peers(&source, &approved, &control).await
+    })
+    .await
+    .map_err(|_| "Tracker discovery exceeded the one-minute preview deadline")??;
     let directory = dirs::config_dir()
         .ok_or("Could not locate the app folder")?
         .join("QuiverDL")
@@ -429,28 +434,38 @@ pub(crate) async fn preview_magnet_files(
     tokio::fs::write(&blocklist, PEER_BLOCKLIST)
         .await
         .map_err(|_| "Could not prepare metadata preview")?;
-    let session = Session::new_with_opts(
-        directory.clone(),
-        SessionOptions {
-            dht: None,
-            listen: None,
-            connect: Some(ConnectionOptions::default()),
-            disable_trackers: true,
-            disable_upload: true,
-            disable_local_service_discovery: true,
-            peer_limit: Some(40),
-            blocklist_url: Some(
-                Url::from_file_path(&blocklist)
-                    .map_err(|_| "Invalid preview folder")?
-                    .into(),
-            ),
-            ..SessionOptions::default()
-        },
+    let session = tokio::time::timeout_at(
+        deadline,
+        Session::new_with_opts(
+            directory.clone(),
+            SessionOptions {
+                dht: None,
+                listen: None,
+                connect: Some(ConnectionOptions::default()),
+                disable_trackers: true,
+                disable_upload: true,
+                disable_local_service_discovery: true,
+                peer_limit: Some(40),
+                blocklist_url: Some(
+                    Url::from_file_path(&blocklist)
+                        .map_err(|_| "Invalid preview folder")?
+                        .into(),
+                ),
+                ..SessionOptions::default()
+            },
+        ),
     )
-    .await
-    .map_err(|_| "Could not start magnet metadata preview")?;
-    let result = tokio::time::timeout(
-        Duration::from_secs(60),
+    .await;
+    let session = match session {
+        Ok(Ok(session)) => session,
+        _ => {
+            let _ = tokio::fs::remove_file(&blocklist).await;
+            let _ = tokio::fs::remove_dir(&directory).await;
+            return Err("Could not start metadata preview within one minute".into());
+        }
+    };
+    let result = tokio::time::timeout_at(
+        deadline,
         session.add_torrent(
             AddTorrent::from_url(source.as_str()),
             Some(AddTorrentOptions {

@@ -91,3 +91,8 @@ builds use their marketplace update channel.
    notarization, install/uninstall behavior, extension pairing, and clean-machine tests.
 
 Never test signing with production keys on pull requests or upload certificates as artifacts.
+
+Desktop builds through `npm run tauri -- build` stage a target-matched native browser helper
+and include it as a Tauri sidecar beside the installed desktop executable. The Linux package
+validation checks the DEB contents, and the Windows smoke check verifies the sibling helper.
+Local `cargo check` remains independent of production sidecar staging.

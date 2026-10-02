@@ -1,4 +1,5 @@
 /target/
+/apps/desktop/src-tauri/binaries/
 **/node_modules/
 **/dist/
 **/__pycache__/

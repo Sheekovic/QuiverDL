@@ -1681,9 +1681,13 @@ function App() {
     }
     if (!(await registerDownload(item, executionSettings))) return;
     if (reviewingBrowserRequest?.id === id) {
-      await invoke("acknowledge_browser_request", { id });
-      setReviewingBrowserRequest(null);
-      setBrowserRequests((current) => current.filter((request) => request.id !== id));
+      try {
+        await invoke("acknowledge_browser_request", { id });
+        setReviewingBrowserRequest(null);
+        setBrowserRequests((current) => current.filter((request) => request.id !== id));
+      } catch (cause) {
+        setError(`The torrent is safely queued, but its browser request remains: ${String(cause)}`);
+      }
     }
     void executeTorrentDownload(item, executionSettings, privacyConfirmed);
   }

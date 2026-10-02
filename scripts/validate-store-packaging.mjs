@@ -38,6 +38,10 @@ function tomlStringArray(section, key) {
 
 const desktop = await readJson("apps", "desktop", "src-tauri", "tauri.conf.json");
 const desktopPackage = await readJson("apps", "desktop", "package.json");
+const sidecar = await readJson("apps", "desktop", "src-tauri", "tauri.sidecar.conf.json");
+assert.deepEqual(sidecar.bundle.externalBin, ["binaries/quiver-native-host"]);
+assert.equal(desktopPackage.scripts.tauri, "node ../../scripts/tauri-cli.mjs");
+assert.ok(desktop.bundle.fileAssociations.some((association) => association.ext.includes("torrent")));
 const releaseConfig = await readJson("release-please-config.json");
 const releaseManifest = await readJson(".release-please-manifest.json");
 const releaseVersion = (await readFile(path.join(repository, "version.txt"), "utf8")).trim();

@@ -32,6 +32,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": { "infoPlist": "Info.plist" },
+    "fileAssociations": [
+      { "ext": ["torrent"], "name": "BitTorrent file", "mimeType": "application/x-bittorrent", "role": "Viewer" }
+    ],
     "resources": [
       "python/quiver_media.py"
     ],

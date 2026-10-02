@@ -944,8 +944,21 @@ pub fn run() {
             cancel_update_install,
             quit_app
         ])
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                desktop_integration::accept_arguments(
+                    &_app.state::<desktop_integration::OpenRequests>(),
+                    urls.into_iter().map(String::from),
+                );
+                if let Some(window) = _app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

@@ -3,6 +3,17 @@ use std::{path::Path, sync::Mutex};
 #[derive(Default)]
 pub(crate) struct OpenRequests(pub Mutex<Vec<String>>);
 
+fn launch_executable(executable: &Path) -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(path) = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from)
+        && path.is_absolute()
+        && path.is_file()
+    {
+        return path;
+    }
+    executable.to_owned()
+}
+
 pub(crate) fn accept_arguments(state: &OpenRequests, arguments: impl Iterator<Item = String>) {
     if let Ok(mut pending) = state.0.lock() {
         for argument in arguments.take(32) {
@@ -99,7 +110,8 @@ pub(crate) fn register_firefox(directory: &Path, executable: &Path) -> Result<()
         .map_err(|_| "Could not save browser settings")?;
         std::fs::write(
             directory.join("desktop-launch.json"),
-            serde_json::to_vec(executable).map_err(|_| "Could not encode app location")?,
+            serde_json::to_vec(&launch_executable(executable))
+                .map_err(|_| "Could not encode app location")?,
         )
         .map_err(|_| "Could not save app location")?;
         #[cfg(windows)]
@@ -134,6 +146,8 @@ fn registry_value(key: &str, name: Option<&str>, value: &str) -> Result<(), Stri
 }
 
 pub(crate) fn register_file_handlers(executable: &Path) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    register_linux_handlers(&launch_executable(executable))?;
     #[cfg(windows)]
     {
         let command = format!("\"{}\" \"%1\"", executable.display());
@@ -215,9 +229,72 @@ pub(crate) fn register_file_handlers(executable: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn linux_desktop_entry(executable: &Path) -> Result<String, String> {
+    let path = executable.to_str().ok_or("The app path must use UTF-8")?;
+    if !executable.is_absolute() || path.chars().any(char::is_control) {
+        return Err("The app path is invalid".into());
+    }
+    // Desktop Entry Exec quoting has two escaping layers; '%' introduces field codes.
+    let mut quoted = String::new();
+    for character in path.chars() {
+        match character {
+            '\\' => quoted.push_str("\\\\\\\\"),
+            '"' | '`' | '$' => {
+                quoted.push_str("\\\\");
+                quoted.push(character);
+            }
+            '%' => quoted.push_str("%%"),
+            _ => quoted.push(character),
+        }
+    }
+    Ok(format!(
+        "[Desktop Entry]\nType=Application\nName=QuiverDL\nExec=\"{quoted}\" %U\nIcon=quiver-desktop\nTerminal=false\nCategories=Network;FileTransfer;\nMimeType=application/x-bittorrent;x-scheme-handler/magnet;\n"
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn register_linux_handlers(executable: &Path) -> Result<(), String> {
+    let applications = dirs::data_dir()
+        .ok_or("Could not locate applications folder")?
+        .join("applications");
+    std::fs::create_dir_all(&applications).map_err(|_| "Could not create applications folder")?;
+    std::fs::write(
+        applications.join("app.quiverdl.desktop.desktop"),
+        linux_desktop_entry(executable)?,
+    )
+    .map_err(|_| "Could not register torrent handlers")?;
+    let _ = std::process::Command::new("update-desktop-database")
+        .arg(&applications)
+        .output();
+    // Preserve existing user defaults; register ours only when there is no handler.
+    for mime in ["application/x-bittorrent", "x-scheme-handler/magnet"] {
+        if let Ok(result) = std::process::Command::new("xdg-mime")
+            .args(["query", "default", mime])
+            .output()
+            && result.status.success()
+            && result.stdout.iter().all(u8::is_ascii_whitespace)
+        {
+            let _ = std::process::Command::new("xdg-mime")
+                .args(["default", "app.quiverdl.desktop.desktop", mime])
+                .output();
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_entry_preserves_paths_and_declares_torrent_handlers() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("Quiver DL 100%.AppImage");
+        let entry = linux_desktop_entry(&executable).unwrap();
+        assert!(entry.contains("Quiver DL 100%%.AppImage\" %U"));
+        assert!(entry.contains("application/x-bittorrent;x-scheme-handler/magnet;"));
+        assert!(linux_desktop_entry(Path::new("relative")).is_err());
+    }
     #[test]
     fn external_arguments_accept_only_magnets_and_torrent_files() {
         assert!(
