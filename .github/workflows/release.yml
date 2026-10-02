@@ -113,7 +113,11 @@ jobs:
       - name: Build native messaging host
         run: cargo build --locked --release -p quiver-native-host --target x86_64-unknown-linux-gnu
       - name: Validate Linux bundles
-        run: npm run tauri -- build --bundles deb,rpm,appimage
+        run: |
+          npm run tauri -- build --bundles deb,rpm,appimage
+          deb="$(find ../../target/release/bundle/deb -name '*.deb' -print -quit)"
+          test -n "$deb"
+          dpkg-deb --contents "$deb" | grep 'usr/bin/quiver-native-host$'
         working-directory: apps/desktop
 
   linux:

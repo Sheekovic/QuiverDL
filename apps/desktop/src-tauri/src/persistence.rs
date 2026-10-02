@@ -310,6 +310,8 @@ pub(crate) struct StoredDownload {
     pub kind: String,
     #[serde(default)]
     pub media_quality: Option<String>,
+    #[serde(default)]
+    pub torrent_selection: Option<Vec<usize>>,
 }
 
 fn default_download_kind() -> String {
@@ -323,13 +325,23 @@ impl StoredDownload {
         if !matches!(self.kind.as_str(), "direct" | "media" | "torrent") {
             return Err("A saved download has an unsupported source type".into());
         }
+        if self.torrent_selection.as_ref().is_some_and(|selection| {
+            self.kind != "torrent"
+                || selection.is_empty()
+                || selection.len() > 10_000
+                || selection.iter().any(|index| *index >= 10_000)
+        }) {
+            return Err("Invalid saved torrent selection".into());
+        }
         if self.media_quality.as_ref().is_some_and(|quality| {
             quality.is_empty() || quality.len() > 135 || quality.chars().any(char::is_control)
         }) {
             return Err("A saved media quality is invalid".into());
         }
-        if !matches!(url.scheme(), "http" | "https" | "magnet")
-            || (self.kind != "torrent" && url.scheme() == "magnet")
+        if !matches!(url.scheme(), "http" | "https" | "magnet" | "file")
+            || (self.kind != "torrent" && matches!(url.scheme(), "magnet" | "file"))
+            || (url.scheme() == "file"
+                && (!url.path().ends_with(".torrent") || url.to_file_path().is_err()))
         {
             return Err("A saved download uses an unsupported URL scheme".into());
         }
@@ -782,6 +794,7 @@ mod tests {
             completed_at_ms: None,
             kind: "direct".into(),
             media_quality: None,
+            torrent_selection: None,
         };
 
         download.validate().expect("multibyte name should be valid");
@@ -814,6 +827,7 @@ mod tests {
                 completed_at_ms: None,
                 kind: "direct".into(),
                 media_quality: None,
+                torrent_selection: None,
             }],
         };
 
@@ -894,6 +908,7 @@ mod tests {
             completed_at_ms: Some("1770003600000".into()),
             kind: "direct".into(),
             media_quality: None,
+            torrent_selection: None,
         };
         completed
             .validate()
@@ -932,6 +947,7 @@ mod tests {
             completed_at_ms: None,
             kind: "direct".into(),
             media_quality: None,
+            torrent_selection: None,
         };
 
         scheduled

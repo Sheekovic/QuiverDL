@@ -37,6 +37,7 @@ dirs.workspace = true
 hex.workspace = true
 keyring.workspace = true
 rand.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 url.workspace = true
 zeroize.workspace = true

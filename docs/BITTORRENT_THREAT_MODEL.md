@@ -6,10 +6,15 @@
 desktop adapter requires per-transfer confirmation and Direct connection mode; it disables DHT,
 local discovery, incoming listeners, uploading, and post-completion seeding. It permits tracker
 contact, outbound TCP peers, and peer exchange only after disclosure. Magnet trackers use a bounded
-QuiverDL HTTPS client with pinned public DNS answers and redirects disabled; only filtered public
+QuiverDL HTTP/HTTPS client and BEP 15 UDP adapter with pinned public DNS answers and redirects disabled; only filtered public
 peer addresses are handed to librqbit, whose special-use blocklist also covers peer exchange.
-Remote `.torrent` URLs, SOCKS routing, DHT, uTP, incoming connections, port mapping, automatic
-capture, and background seeding remain deferred.
+Local `.torrent` files and remote metadata now enter a bounded, canonical bencode validation path,
+with file/path validation, a complete preview, explicit file selection, and a content-addressed local
+metadata cache. Remote metadata fetches pin public DNS addresses, revalidate redirects, and stop at
+8 MiB. Magnet metadata preview uses a list-only session and stops it before file selection. Browser
+capture and Windows file/protocol handlers open the preview; they do not authorize peer traffic.
+SOCKS routing, DHT, uTP, incoming connections, port mapping, and background seeding remain
+outside this adapter. Torrents still require HTTP, HTTPS, or UDP trackers and Direct connection mode.
 
 [BEP 3](https://www.bittorrent.org/beps/bep_0003.html) defines v1 metainfo, trackers, piece hashes,
 and a peer protocol in which downloaders also upload. [BEP 52](https://www.bittorrent.org/beps/bep_0052.html)
@@ -122,20 +127,22 @@ bytes without promoting them.
 - No tracker or web-seed contact, DNS lookup, DHT lookup, local discovery, peer connection, listener,
   port mapping, or content request occurs before confirmation. Browser interception for `.torrent`
   and magnet links remains disabled until a separate reviewed integration milestone.
-- The first networked backend accepts only HTTPS tracker URLs, optional HTTPS web-seed URLs, and
-  outbound TCP peer connections learned from an approved tracker. Reject HTTP, FTP, file,
-  WebSocket, UDP tracker, uTP, and every unknown or unreviewed scheme/transport before dispatch.
-  Each additional tracker, web-seed, or peer transport requires its own later review.
+- Tracker discovery supports HTTP, HTTPS, and UDP (BEP 15), with UDP path/query passkeys
+  preserved via BEP 41. HTTP Basic authentication is supported; UDP authority credentials are
+  unsupported. Unsupported or unavailable trackers are skipped. HTTP and UDP expose announces
+  on the network; HTTPS provides transport encryption. Connected UDP sockets pin the approved
+  endpoint, validate transaction/action fields, bound replies, and retry after 15 seconds within
+  a 35-second exchange budget. Other tracker schemes remain unsupported.
 - Resolve and classify every tracker, web-seed, direct-peer, DHT, peer-exchange, and local-discovery
   address before connecting. Loopback, link-local, private, and other special-use destinations are
   denied by default; metadata cannot grant access to them. Any local-network exception is an
   explicit per-torrent approval, and mixed public/private DNS answers fail closed.
 - HTTP tracker and web-seed redirects are bounded and re-enter address classification on every hop.
-  They must remain HTTPS and same-origin on every hop; cross-origin redirects fail closed so an
+  Tracker redirects are disabled; metadata redirects are revalidated. Cross-origin tracker redirects fail closed so an
   unconfirmed tracker or seed never receives the torrent identifier or request. Resolution and the
   actual socket destination remain bound to the approved address class so DNS rebinding cannot
   bypass the decision.
-- Incoming listeners, DHT, peer exchange, local service discovery, UPnP/NAT-PMP/PCP, UDP trackers,
+- Incoming listeners, DHT, peer exchange, local service discovery, UPnP/NAT-PMP/PCP,
   and seeding after completion are individually modeled features, not implicit defaults.
 - Connections, peers, pending requests, message sizes, metadata bytes, retries, timeouts, upload
   rate, download rate, and share duration are bounded globally and per torrent.

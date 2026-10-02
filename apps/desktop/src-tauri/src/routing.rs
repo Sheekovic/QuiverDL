@@ -1,6 +1,59 @@
 use std::path::{Component, Path, PathBuf};
 
 #[tauri::command]
+pub(crate) fn default_download_directory() -> Result<String, String> {
+    dirs::download_dir()
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok_or("Could not find Downloads".into())
+}
+
+#[tauri::command]
+pub(crate) async fn resolve_browser_destination(
+    default_path: String,
+    category_folder: String,
+    filename: String,
+) -> Result<String, String> {
+    let base = if default_path.is_empty() {
+        dirs::download_dir().ok_or("Could not locate the Downloads folder")?
+    } else {
+        validate_absolute_folder(&default_path)?
+    };
+    let directory = resolve_category_directory(
+        base.to_string_lossy().into_owned(),
+        if category_folder.is_empty() {
+            ".".into()
+        } else {
+            category_folder
+        },
+    )
+    .await?;
+    let filename = super::sanitize_filename(Some(&filename));
+    let original = Path::new(&filename);
+    let stem = original.file_stem().unwrap_or_default().to_string_lossy();
+    let extension = original
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .unwrap_or_default();
+    for suffix in 0..10_000 {
+        let name = if suffix == 0 {
+            filename.clone()
+        } else {
+            format!("{stem} ({suffix}){extension}")
+        };
+        let destination = Path::new(&directory).join(name);
+        let busy = [
+            destination.clone(),
+            PathBuf::from(format!("{}.quiver-part", destination.display())),
+            PathBuf::from(format!("{}.quiver.json", destination.display())),
+        ];
+        if busy.iter().all(|path| !path.exists()) {
+            return Ok(destination.to_string_lossy().into_owned());
+        }
+    }
+    Err("Could not choose an unused download filename".into())
+}
+
+#[tauri::command]
 pub(crate) async fn resolve_smart_destination(
     default_path: String,
     category_folder: String,

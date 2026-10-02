@@ -9,7 +9,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { MessageKey, translate } from "./i18n";
 import quiverLogo from "../src-tauri/icons/icon.png";
@@ -88,6 +88,7 @@ type DownloadItem = {
   completedAtMs: string | null;
   kind: "direct" | "media" | "torrent";
   mediaQuality?: string;
+  torrentSelection?: number[];
 };
 
 type CategoryRule = {
@@ -143,12 +144,12 @@ type BrowserRequest = {
   id: string;
   url: string;
   suggestedFilename: string | null;
+  automatic: boolean;
 };
 
 type BrowserBridgeInfo = {
-  hostName: string;
-  token: string;
-  configPath: string;
+  connected: boolean;
+  message: string;
 };
 
 type ClipboardCandidate = {
@@ -172,6 +173,8 @@ type TorrentInspection = {
   name: string;
   sourceType: "magnet" | "torrentFile";
   networkOrigins: string[];
+  files?: { path: string; bytes: string }[];
+  totalBytes?: string | null;
 };
 
 type TorrentProgress = {
@@ -191,6 +194,22 @@ type SourceMode = "auto" | "media" | "torrent";
 
 type Filter = "all" | "active" | "completed" | "failed";
 type HistorySort = "newest" | "oldest" | "name" | "size";
+
+const SETTINGS_TABS = [
+  { id: "general", en: "General", ar: "عام", words: "theme appearance accent color light dark system language notifications history retention مظهر لغة إشعارات سجل" },
+  { id: "downloads", en: "Downloads", ar: "التنزيلات", words: "retry attempts connections segments server speed bandwidth limits queue parallel sequential محاولات سرعة اتصالات طابور" },
+  { id: "folders", en: "Folders", ar: "المجلدات", words: "default download folder directory path smart routing categories extensions mime حفظ مجلد مسار تصنيف" },
+  { id: "network", en: "Network", ar: "الشبكة", words: "proxy direct system custom url bypass username password network وكيل شبكة كلمة مرور" },
+  { id: "integration", en: "Browser", ar: "المتصفح", words: "firefox browser extension integration capture clipboard copied links متصفح فايرفوكس روابط حافظة" },
+  { id: "media", en: "Media", ar: "الوسائط", words: "python executable yt-dlp ffmpeg audio video engine وسائط فيديو صوت" },
+  { id: "updates", en: "Updates", ar: "التحديثات", words: "updates version install release تحديث إصدار" },
+] as const;
+type SettingsTab = typeof SETTINGS_TABS[number]["id"];
+
+function SettingsSection({ title, visible, children }: { title: string; visible: boolean; children: ReactNode }) {
+  if (!visible) return null;
+  return <section className="settings-section" aria-label={title}><h3>{title}</h3>{children}</section>;
+}
 
 const APP_STATE_SCHEMA_VERSION = 5;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -483,6 +502,11 @@ function App() {
   const [mediaInspection, setMediaInspection] = useState<MediaInspection | null>(null);
   const [torrentInspection, setTorrentInspection] = useState<TorrentInspection | null>(null);
   const [torrentPrivacyConfirmed, setTorrentPrivacyConfirmed] = useState(false);
+  const [torrentDestination, setTorrentDestination] = useState("");
+  const [selectedTorrentFiles, setSelectedTorrentFiles] = useState<Set<number>>(new Set());
+  const [torrentFileSearch, setTorrentFileSearch] = useState("");
+  const [torrentMetadataBusy, setTorrentMetadataBusy] = useState(false);
+  const [torrentMenu, setTorrentMenu] = useState<{ x: number; y: number; index?: number } | null>(null);
   const [mediaQuality, setMediaQuality] = useState("best");
   const [sourceMode, setSourceMode] = useState<SourceMode>("auto");
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
@@ -497,7 +521,20 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const latestSettings = useRef(settings);
   latestSettings.current = settings;
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settingsSearch, setSettingsSearch] = useState("");
+  const settingsMatches = (id: SettingsTab) => {
+    const query = settingsSearch.trim().toLocaleLowerCase();
+    if (!query) return id === settingsTab;
+    const tab = SETTINGS_TABS.find((entry) => entry.id === id)!;
+    const index = `${tab.en} ${tab.ar} ${tab.words}`.toLocaleLowerCase();
+    return query.split(/\s+/).every((word) => index.includes(word));
+  };
   const [browserRequests, setBrowserRequests] = useState<BrowserRequest[]>([]);
+  const browserHandled = useRef(new Set<string>());
+  const browserProcessing = useRef(false);
+  const openedSourceProcessing = useRef(false);
+  const [openedSources, setOpenedSources] = useState<string[]>([]);
   const [reviewingBrowserRequest, setReviewingBrowserRequest] =
     useState<BrowserRequest | null>(null);
   const [bridgeInfo, setBridgeInfo] = useState<BrowserBridgeInfo | null>(null);
@@ -604,6 +641,9 @@ function App() {
   useEffect(() => {
     let active = true;
     const refresh = () => {
+      void invoke<string[]>("take_open_requests").then((sources) => {
+        if (active && sources.length) setOpenedSources((current) => [...current, ...sources]);
+      });
       void invoke<BrowserRequest[]>("list_browser_requests")
         .then((requests) => {
           if (active) setBrowserRequests(requests);
@@ -619,6 +659,65 @@ function App() {
       window.clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!stateReady || browserProcessing.current) return;
+    const request = browserRequests.find((entry) => entry.automatic && !browserHandled.current.has(entry.id));
+    if (!request) return;
+    // A torrent awaiting the user's download choice must not be replaced.
+    if (torrentInspection) return;
+    browserProcessing.current = true;
+    browserHandled.current.add(request.id);
+    void (async () => {
+      try {
+        if (latestSnapshot.current?.downloads.some((entry) => entry.id === request.id)) {
+          await invoke("acknowledge_browser_request", { id: request.id });
+          return;
+        }
+        const torrent = request.url.toLowerCase().startsWith("magnet:") || /\.torrent(?:[?#]|$)/i.test(request.suggestedFilename || request.url);
+        if (torrent) {
+          const result = await invoke<TorrentInspection>("inspect_torrent_source", { source: request.url, settings: latestSettings.current });
+          setTorrentInspection(result);
+          setReviewingBrowserRequest(request);
+          setSourceMode("torrent");
+          return;
+        }
+        const result = await invoke<LinkInspectionResponse>("inspect_url", { url: request.url, settings: latestSettings.current });
+        const filename = request.suggestedFilename || result.suggestedFilename || filenameFromUrl(result.effectiveUrl);
+        if (result.contentType?.split(";", 1)[0].trim() === "application/x-bittorrent" || /\.torrent$/i.test(result.suggestedFilename || filename)) {
+          const preview = await invoke<TorrentInspection>("inspect_torrent_source", { source: request.url, settings: latestSettings.current });
+          setTorrentInspection(preview);
+          setReviewingBrowserRequest(request);
+          setSourceMode("torrent");
+          return;
+        }
+        const current = latestSettings.current;
+        const category = matchingCategory(filename, result.contentType, current.categories);
+        const destination = await invoke<string>("resolve_browser_destination", {
+          defaultPath: current.defaultDownloadPath,
+          categoryFolder: current.smartRouting ? category?.folder || "" : "",
+          filename,
+        });
+        await runDownload(request.url, destination, undefined, request.id);
+      } catch {
+        setError("Could not start a browser download. Use its Review button to retry.");
+      } finally { browserProcessing.current = false; }
+    })();
+  }, [stateReady, browserRequests, torrentInspection]);
+
+  useEffect(() => {
+    if (!stateReady || torrentInspection || !openedSources.length || openedSourceProcessing.current) return;
+    openedSourceProcessing.current = true;
+    const source = openedSources[0];
+    void invoke<TorrentInspection>("inspect_torrent_source", { source, settings: latestSettings.current }).then((result) => {
+      setTorrentInspection(result);
+      setReviewingBrowserRequest(null);
+      setSourceMode("torrent");
+    }).catch((cause) => setError(String(cause))).finally(() => {
+      openedSourceProcessing.current = false;
+      setOpenedSources((current) => current.slice(1));
+    });
+  }, [stateReady, openedSources, torrentInspection]);
 
   useEffect(() => {
     latestSnapshot.current = {
@@ -777,7 +876,23 @@ function App() {
 
   useEffect(() => {
     setTorrentPrivacyConfirmed(false);
+    setSelectedTorrentFiles(new Set(torrentInspection?.files?.map((_, index) => index) || []));
+    setTorrentFileSearch("");
+    setTorrentMenu(null);
+    if (torrentInspection && !torrentDestination) {
+      if (settings.defaultDownloadPath) setTorrentDestination(settings.defaultDownloadPath);
+      else void invoke<string>("default_download_directory").then(setTorrentDestination).catch(() => {});
+    }
   }, [torrentInspection?.sourceUrl]);
+
+  useEffect(() => {
+    if (!torrentMenu) return;
+    const close = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest(".torrent-context-menu")) setTorrentMenu(null); };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setTorrentMenu(null); };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("keydown", escape); };
+  }, [torrentMenu]);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -787,7 +902,7 @@ function App() {
       modal?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
       ) ?? [],
-    ).filter((element) => !element.hasAttribute("hidden"));
+    ).filter((element) => element.getClientRects().length > 0);
     const containFocus = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -955,10 +1070,11 @@ function App() {
         || submittedUrl.toLowerCase().startsWith("magnet:")
         || submittedUrl.toLowerCase().split(/[?#]/, 1)[0].endsWith(".torrent")
       ) {
-        const result = await invoke<Omit<TorrentInspection, "sourceUrl">>("inspect_torrent_source", {
+        const result = await invoke<TorrentInspection>("inspect_torrent_source", {
           source: submittedUrl,
+          settings,
         });
-        setTorrentInspection({ ...result, sourceUrl: submittedUrl });
+        setTorrentInspection(result);
         return;
       }
       let useMedia = sourceMode === "media" || isLikelyMediaUrl(submittedUrl);
@@ -1034,18 +1150,24 @@ function App() {
     }
   }
 
+  async function openTorrentFile() {
+    try {
+      const path = await open({ multiple: false, filters: [{ name: "BitTorrent", extensions: ["torrent"] }] });
+      if (typeof path !== "string") return;
+      const source = await invoke<string>("torrent_file_url", { path });
+      const result = await invoke<TorrentInspection>("inspect_torrent_source", { source, settings });
+      setReviewingBrowserRequest(null);
+      setTorrentInspection(result);
+      setSourceMode("torrent");
+    } catch (cause) { setError(String(cause)); }
+  }
+
   async function chooseTorrentDestination() {
     if (!torrentInspection) return;
     setChoosingDestination(true);
     setError("");
     try {
-      const category = settings.categories.find((entry) => entry.name === "Torrents");
-      const destination = settings.smartRouting && settings.defaultDownloadPath && category
-        ? await invoke<string>("resolve_category_directory", {
-            defaultPath: settings.defaultDownloadPath,
-            categoryFolder: category.folder,
-          })
-        : await open({
+      const destination = torrentDestination || await open({
             title: "Choose a folder for this torrent",
             directory: true,
             multiple: false,
@@ -1055,13 +1177,30 @@ function App() {
       const selected = torrentInspection;
       setUrl("");
       setTorrentInspection(null);
-      setSourceMode("auto");
-      void runTorrentDownload(selected.sourceUrl, destination, selected.name, undefined, true);
+      setSourceMode("torrent");
+      void runTorrentDownload(selected.sourceUrl, destination, selected.name, reviewingBrowserRequest?.id, true, [...selectedTorrentFiles].sort((a, b) => a - b));
     } catch (cause) {
       setError(String(cause));
     } finally {
       setChoosingDestination(false);
     }
+  }
+
+  async function browseTorrentDestination() {
+    const destination = await open({ title: "Choose torrent download folder", directory: true, multiple: false, defaultPath: torrentDestination || undefined });
+    if (typeof destination === "string") setTorrentDestination(destination);
+    setTorrentMenu(null);
+  }
+
+  async function loadMagnetFileList() {
+    if (!torrentInspection || !torrentPrivacyConfirmed) return;
+    setTorrentMetadataBusy(true);
+    setError("");
+    try {
+      const result = await invoke<TorrentInspection>("preview_magnet_files", { source: torrentInspection.sourceUrl, settings, privacyConfirmed: true });
+      setTorrentInspection(result);
+    } catch (cause) { setError(String(cause)); }
+    finally { setTorrentMetadataBusy(false); }
   }
 
   async function chooseMediaDestination() {
@@ -1163,7 +1302,7 @@ function App() {
   ) {
     await recoveryGate.current?.promise;
     const executionSettings = latestSettings.current;
-    const id = existingId ?? createTaskId();
+    const id = existingId ?? browserRequestId ?? createTaskId();
     pendingCancellations.current.delete(id);
     if (nextQueueSequence.current > MAX_QUEUE_SEQUENCE) {
       setError("The durable queue sequence is exhausted; remove old entries and restart QuiverDL.");
@@ -1188,7 +1327,7 @@ function App() {
       kind: "direct",
     };
     setDownloads((current) =>
-      existingId
+      current.some((existing) => existing.id === id)
         ? current.map((existing) => (existing.id === existingId ? item : existing))
         : [item, ...current],
     );
@@ -1395,7 +1534,7 @@ function App() {
       kind: "media",
       mediaQuality: quality,
     };
-    setDownloads((current) => existingId
+    setDownloads((current) => current.some((entry) => entry.id === id)
       ? current.map((entry) => entry.id === existingId ? item : entry)
       : [item, ...current]);
     setFilter("all");
@@ -1481,6 +1620,7 @@ function App() {
     title: string,
     existingId?: string,
     privacyConfirmed = false,
+    selectedFiles?: number[],
   ) {
     await recoveryGate.current?.promise;
     const executionSettings = latestSettings.current;
@@ -1510,9 +1650,10 @@ function App() {
       queueSequence,
       completedAtMs: null,
       kind: "torrent",
+      torrentSelection: selectedFiles,
     };
-    setDownloads((current) => existingId
-      ? current.map((entry) => entry.id === existingId ? item : entry)
+    setDownloads((current) => current.some((entry) => entry.id === id)
+      ? current.map((entry) => entry.id === id ? item : entry)
       : [item, ...current]);
     setFilter("all");
     const { recoverable: _recoverable, ...storedItem } = item;
@@ -1539,6 +1680,15 @@ function App() {
       return;
     }
     if (!(await registerDownload(item, executionSettings))) return;
+    if (reviewingBrowserRequest?.id === id) {
+      try {
+        await invoke("acknowledge_browser_request", { id });
+        setReviewingBrowserRequest(null);
+        setBrowserRequests((current) => current.filter((request) => request.id !== id));
+      } catch (cause) {
+        setError(`The torrent is safely queued, but its browser request remains: ${String(cause)}`);
+      }
+    }
     void executeTorrentDownload(item, executionSettings, privacyConfirmed);
   }
 
@@ -1571,6 +1721,7 @@ function App() {
           destinationDirectory: item.destination,
           settings: executionSettings,
           privacyConfirmed,
+          selectedFiles: item.torrentSelection ?? null,
         },
         onEvent,
       });
@@ -1871,6 +2022,25 @@ function App() {
 
   return (
     <div className="app-shell">
+      <div className="app-titlebar"
+        onMouseDown={(event) => {
+          if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+          if (event.detail === 2) void getCurrentWindow().toggleMaximize();
+          else void getCurrentWindow().startDragging();
+        }}>
+        <div className="app-titlebar-name"><img src={quiverLogo} alt="" draggable={false} /><span>QuiverDL</span></div>
+            <div className="window-controls">
+              <button type="button" aria-label="Minimize QuiverDL" onClick={() => void getCurrentWindow().minimize()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M2 6.5h8" /></svg>
+              </button>
+              <button type="button" aria-label="Maximize or restore QuiverDL" onClick={() => void getCurrentWindow().toggleMaximize()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><rect x="2.25" y="2.25" width="7.5" height="7.5" rx=".4" /></svg>
+              </button>
+              <button className="window-close" type="button" aria-label="Close QuiverDL" onClick={() => void getCurrentWindow().close()}>
+                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="m2.5 2.5 7 7m0-7-7 7" /></svg>
+              </button>
+            </div>
+      </div>
       <aside className="sidebar">
         <div
           className="brand"
@@ -1906,7 +2076,27 @@ function App() {
                 </div>
                 <button type="button" aria-label="Close settings" autoFocus onClick={closeSettings}>×</button>
               </div>
-              <div className="settings-panel settings-modal-body">
+              <div className="settings-navigation">
+                <label className="settings-search">
+                  <span>{settings.language === "ar" ? "البحث في الإعدادات" : "Find a setting"}</span>
+                  <input type="search" value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} placeholder={settings.language === "ar" ? "ابحث عن السرعة أو المجلد أو الوكيل…" : "Search speed, folder, proxy…"} />
+                </label>
+                <div className="settings-tabs" role="tablist" aria-label="Settings categories">
+                  {SETTINGS_TABS.map((tab, index) => <button key={tab.id} id={`settings-tab-${tab.id}`} role="tab" type="button" aria-selected={settingsTab === tab.id && !settingsSearch.trim()} aria-controls="settings-content" tabIndex={settingsTab === tab.id ? 0 : -1}
+                    onClick={() => { setSettingsTab(tab.id); setSettingsSearch(""); }}
+                    onKeyDown={(event) => {
+                      const delta = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                      const next = event.key === "Home" ? 0 : event.key === "End" ? SETTINGS_TABS.length - 1 : (index + delta + SETTINGS_TABS.length) % SETTINGS_TABS.length;
+                      if (delta || event.key === "Home" || event.key === "End") {
+                        event.preventDefault(); setSettingsTab(SETTINGS_TABS[next].id); setSettingsSearch("");
+                        document.getElementById(`settings-tab-${SETTINGS_TABS[next].id}`)?.focus();
+                      }
+                    }}>{settings.language === "ar" ? tab.ar : tab.en}</button>)}
+                </div>
+              </div>
+              <div id="settings-content" role={settingsSearch.trim() ? "region" : "tabpanel"} aria-label={settingsSearch.trim() ? "Settings search results" : undefined} aria-labelledby={settingsSearch.trim() ? undefined : `settings-tab-${settingsTab}`} className="settings-panel settings-modal-body">
+                {settingsSearch.trim() && <p role="status">{SETTINGS_TABS.filter((tab) => settingsMatches(tab.id)).length ? "Matching settings" : "No settings found. Try another search."}</p>}
+          <SettingsSection title="Appearance and language" visible={settingsMatches("general")}>
           <fieldset className="settings-group theme-settings">
             <legend>Theme</legend>
             <label>
@@ -1953,6 +2143,9 @@ function App() {
               <option value="ar">العربية</option>
             </select>
           </label>
+
+          </SettingsSection>
+          <SettingsSection title="Transfer settings" visible={settingsMatches("downloads")}>
           <label>
             {t("retryAttempts")}
             <input type="number" min={1} max={10} value={settings.retryAttempts} onChange={(event) => setSettings((current) => ({ ...current, retryAttempts: Math.max(1, Math.min(10, Number(event.target.value))) }))} />
@@ -1989,6 +2182,9 @@ function App() {
           <small className="queue-help">
             Sequential mode starts one queued download at a time. Scheduled items join the queue when due.
           </small>
+
+          </SettingsSection>
+          <SettingsSection title="Notifications and history" visible={settingsMatches("general")}>
           <label className="checkbox-setting">
             <input type="checkbox" checked={settings.notifications} onChange={(event) => setSettings((current) => ({ ...current, notifications: event.target.checked }))} />
             {t("notifications")}
@@ -2014,20 +2210,11 @@ function App() {
             </select>
           </label>
           <small className="queue-help">{t("historyRetentionHint")}</small>
-          <fieldset className="settings-group">
+
+          </SettingsSection>
+          <SettingsSection title="Download folders" visible={settingsMatches("folders")}>
+          <fieldset className="settings-group routing-settings">
             <legend>Capture & routing</legend>
-            <label className="checkbox-setting">
-              <input
-                type="checkbox"
-                checked={settings.clipboardMonitoring}
-                onChange={(event) => setSettings((current) => ({
-                  ...current,
-                  clipboardMonitoring: event.target.checked,
-                }))}
-              />
-              Monitor copied download links
-            </label>
-            <small className="queue-help">Only URL-shaped clipboard text is inspected. Clipboard contents never leave this device.</small>
             <label className="checkbox-setting">
               <input
                 type="checkbox"
@@ -2052,7 +2239,7 @@ function App() {
                 <button type="button" onClick={addCategory} disabled={settings.categories.length >= 32}>Add category</button>
               </div>
               {settings.categories.map((category, index) => (
-                <div className="category-card" key={`${index}-${category.name}`}>
+                <details className="category-card" key={index}><summary>{category.name || "New category"}</summary>
                   <label>
                     Name
                     <input value={category.name} onChange={(event) => updateCategory(index, { name: event.target.value })} />
@@ -2082,11 +2269,14 @@ function App() {
                   {settings.categories.length > 1 && (
                     <button className="remove-category" type="button" onClick={() => removeCategory(index)}>Remove</button>
                   )}
-                </div>
+                </details>
               ))}
             </div>
           </fieldset>
-          <fieldset className="settings-group">
+
+          </SettingsSection>
+          <SettingsSection title="Media downloads" visible={settingsMatches("media")}>
+          <fieldset className="settings-group media-engine-settings">
             <legend>Media engine</legend>
             <label>
               Python executable (optional)
@@ -2099,6 +2289,9 @@ function App() {
             </label>
             <small className="credential-status">Media downloads use the yt-dlp Python API. Install with <code>python -m pip install -U yt-dlp</code>; FFmpeg is required for merged video and audio conversion.</small>
           </fieldset>
+
+          </SettingsSection>
+          <SettingsSection title="Connection and proxy" visible={settingsMatches("network")}>
           <fieldset className="proxy-settings">
             <legend>Proxy</legend>
             <label>
@@ -2217,9 +2410,15 @@ function App() {
                   : settings.proxyUrl}
             </small>
           </fieldset>
+
+          </SettingsSection>
+          <SettingsSection title="Firefox integration" visible={settingsMatches("integration")}>
           <button className="bridge-button" type="button" onClick={() => void revealBrowserBridge()}>
-            Browser extension setup
+            Check browser integration
           </button>
+
+          </SettingsSection>
+          <SettingsSection title="App updates" visible={settingsMatches("updates")}>
           {UPDATER_ENABLED && (
             <div className="updater-settings">
               <button
@@ -2233,15 +2432,34 @@ function App() {
               {updateStatus && <small role="status">{updateStatus}</small>}
             </div>
           )}
+
+          </SettingsSection>
+          <SettingsSection title="Connection status" visible={settingsMatches("integration")}>
           {bridgeInfo && (
             <div className="bridge-secret">
-              <span>Native host</span>
-              <code>{bridgeInfo.hostName}</code>
-              <span>Pairing token</span>
-              <code>{bridgeInfo.token}</code>
-              <small title={bridgeInfo.configPath}>Keep this token private.</small>
+              <strong>{bridgeInfo.connected ? "Firefox ready" : "Browser integration needs attention"}</strong>
+              <span>{bridgeInfo.message}</span>
             </div>
           )}
+
+          </SettingsSection>
+
+          <SettingsSection title="Clipboard capture" visible={settingsMatches("integration")}>
+            <label className="checkbox-setting">
+              <input
+                type="checkbox"
+                checked={settings.clipboardMonitoring}
+                onChange={(event) => setSettings((current) => ({
+                  ...current,
+                  clipboardMonitoring: event.target.checked,
+                }))}
+              />
+              Monitor copied download links
+            </label>
+            <small className="queue-help">Only URL-shaped clipboard text is inspected. Clipboard contents never leave this device.</small>
+
+          </SettingsSection>
+          {settingsMatches("updates") && !UPDATER_ENABLED && <p>Automatic updates are unavailable in this build. Install a newer QuiverDL release to update.</p>}
               </div>
             </section>
           </div>
@@ -2262,17 +2480,7 @@ function App() {
           </div>
           <div className="header-actions">
             <span className="engine-badge"><i /> Engine ready</span>
-            <div className="window-controls">
-              <button type="button" aria-label="Minimize QuiverDL" onClick={() => void getCurrentWindow().minimize()}>
-                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="M2 6.5h8" /></svg>
-              </button>
-              <button type="button" aria-label="Maximize or restore QuiverDL" onClick={() => void getCurrentWindow().toggleMaximize()}>
-                <svg aria-hidden="true" viewBox="0 0 12 12"><rect x="2.25" y="2.25" width="7.5" height="7.5" rx=".4" /></svg>
-              </button>
-              <button className="window-close" type="button" aria-label="Close QuiverDL" onClick={() => void getCurrentWindow().close()}>
-                <svg aria-hidden="true" viewBox="0 0 12 12"><path d="m2.5 2.5 7 7m0-7-7 7" /></svg>
-              </button>
-            </div>
+
           </div>
         </header>
         <div className="action-toolbar" role="toolbar" aria-label="Download actions">
@@ -2359,7 +2567,7 @@ function App() {
         <section className="quick-add" aria-labelledby="quick-add-title">
           <div>
             <p className="eyebrow">{t("newDownload")}</p>
-            <h2 id="quick-add-title">{t("pasteLink")}</h2>
+            <h2 id="quick-add-title">{sourceMode === "torrent" ? "Open a torrent or paste a magnet link" : sourceMode === "media" ? "Add a video or audio link" : t("pasteLink")}</h2>
           </div>
           <form onSubmit={inspectLink}>
             <label htmlFor="download-url">{t("downloadUrl")}</label>
@@ -2377,7 +2585,7 @@ function App() {
                   setTorrentInspection(null);
                   setReviewingBrowserRequest(null);
                 }}
-                placeholder={sourceMode === "media" ? "Paste a video or media page URL" : sourceMode === "torrent" ? "Paste a magnet link with HTTPS trackers" : "https://example.com/archive.zip"}
+                placeholder={sourceMode === "media" ? "Paste a video or media page URL" : sourceMode === "torrent" ? "Paste a magnet link or torrent URL" : "https://example.com/archive.zip"}
                 autoComplete="off"
                 disabled={inspecting}
                 required
@@ -2385,6 +2593,7 @@ function App() {
               <button className="primary" type="submit" disabled={inspecting || !url.trim()}>
                 {inspecting ? t("inspecting") : t("inspect")}
               </button>
+              {sourceMode === "torrent" && <button className="open-torrent-button" type="button" onClick={() => void openTorrentFile()} disabled={inspecting}>Open .torrent</button>}
             </div>
           </form>
 
@@ -2456,10 +2665,10 @@ function App() {
             </div>
           )}
           {torrentInspection && (
-            <div className="inspection-card torrent-inspection">
+            <div className="inspection-card torrent-inspection" onContextMenu={(event) => { event.preventDefault(); setTorrentMenu({ x: Math.min(event.clientX, window.innerWidth - 240), y: Math.min(event.clientY, window.innerHeight - 240) }); }}>
               <div className="torrent-mark" aria-hidden="true">P2P</div>
               <div className="inspection-details">
-                <span className="source-kind">{torrentInspection.sourceType === "magnet" ? "Magnet link" : "Remote .torrent file"}</span>
+                <span className="source-kind">{torrentInspection.sourceType === "magnet" ? "Magnet link" : "Torrent file"}</span>
                 <h3>{torrentInspection.name}</h3>
                 <p>Your IP address and torrent identifier can be visible to trackers and peers.</p>
                 <small>Piece hashes detect corruption; they do not authenticate the publisher.</small>
@@ -2467,8 +2676,24 @@ function App() {
                   <small>Known network origins: {torrentInspection.networkOrigins.join(", ")}</small>
                 )}
                 {torrentInspection.sourceType === "torrentFile" && (
-                  <small>Embedded tracker origins are not known until the confirmed metadata fetch.</small>
+                  <div className="torrent-file-picker">
+                    <div className="torrent-file-toolbar">
+                      <strong>{selectedTorrentFiles.size} / {torrentInspection.files?.length} files · {formatBytes((torrentInspection.files || []).reduce((sum, file, index) => sum + (selectedTorrentFiles.has(index) ? BigInt(file.bytes) : 0n), 0n))} selected</strong>
+                      <button type="button" onClick={() => setSelectedTorrentFiles(new Set(torrentInspection.files?.map((_, index) => index)))}>Select all</button>
+                      <button type="button" onClick={() => setSelectedTorrentFiles(new Set())}>Select none</button>
+                    </div>
+                    <input type="search" aria-label="Find torrent files" placeholder="Find a file or folder…" value={torrentFileSearch} onChange={(event) => setTorrentFileSearch(event.target.value)} />
+                    <div className="torrent-file-list" role="group" aria-label="Files to download">
+                      {torrentInspection.files?.map((file, index) => ({ file, index })).filter(({ file }) => file.path.toLowerCase().includes(torrentFileSearch.toLowerCase())).map(({ file, index }) => (
+                        <label key={file.path} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setTorrentMenu({ index, x: Math.min(event.clientX, window.innerWidth - 240), y: Math.min(event.clientY, window.innerHeight - 240) }); }}>
+                          <input type="checkbox" checked={selectedTorrentFiles.has(index)} onChange={(event) => setSelectedTorrentFiles((current) => { const next = new Set(current); if (event.target.checked) next.add(index); else next.delete(index); return next; })} />
+                          <span>{file.path}</span><small>{formatBytes(BigInt(file.bytes))}</small>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 )}
+                <label>Download folder<div className="path-picker-row"><input readOnly value={torrentDestination} placeholder="Choose a folder" /><button type="button" onClick={() => void browseTorrentDestination()}>Browse…</button></div></label>
                 <label className="torrent-consent">
                   <input
                     type="checkbox"
@@ -2485,11 +2710,19 @@ function App() {
                   </small>
                 )}
               </div>
-              <button className="primary save-button" type="button" onClick={chooseTorrentDestination} disabled={choosingDestination || !torrentPrivacyConfirmed || settings.proxyMode !== "disabled"}>
-                {choosingDestination ? t("opening") : "I understand — choose folder"}
-              </button>
+              <div className="torrent-start-actions">
+                {torrentInspection.sourceType === "magnet" ? <button className="primary" type="button" onClick={() => void loadMagnetFileList()} disabled={torrentMetadataBusy || !torrentPrivacyConfirmed || settings.proxyMode !== "disabled"}>{torrentMetadataBusy ? "Retrieving file list…" : "Preview files"}</button> : <button className="primary" type="button" onClick={chooseTorrentDestination} disabled={choosingDestination || !torrentPrivacyConfirmed || settings.proxyMode !== "disabled" || selectedTorrentFiles.size === 0}>{choosingDestination ? t("opening") : "Download selected files"}</button>}
+                <button type="button" disabled={torrentMetadataBusy} onClick={() => { setTorrentInspection(null); setReviewingBrowserRequest(null); }}>Close preview</button>
+              </div>
             </div>
           )}
+          {torrentMenu && <div className="torrent-context-menu" role="menu" aria-label="Torrent options" style={{ left: torrentMenu.x, top: torrentMenu.y }}>
+            <button role="menuitem" type="button" autoFocus onClick={() => void browseTorrentDestination()}>Choose download folder…</button>
+            {torrentMenu.index !== undefined && <button role="menuitem" type="button" onClick={() => { setSelectedTorrentFiles(new Set([torrentMenu.index!])); setTorrentMenu(null); }}>Download only this file</button>}
+            {torrentMenu.index !== undefined && <button role="menuitem" type="button" onClick={() => { setSelectedTorrentFiles((current) => { const next = new Set(current); next.delete(torrentMenu.index!); return next; }); setTorrentMenu(null); }}>Skip this file</button>}
+            <button role="menuitem" type="button" onClick={() => { setSelectedTorrentFiles(new Set(torrentInspection?.files?.map((_, index) => index))); setTorrentMenu(null); }}>Select all files</button>
+            <button role="menuitem" type="button" onClick={() => { setSelectedTorrentFiles(new Set()); setTorrentMenu(null); }}>Select no files</button>
+          </div>}
         </section>
 
         {browserRequests.length > 0 && (

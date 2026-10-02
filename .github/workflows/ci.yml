@@ -262,6 +262,9 @@ jobs:
       - name: Check Windows desktop integration
         if: ${{ needs.changes.outputs.desktop == 'true' }}
         run: cargo check -p quiver-desktop -p quiver-native-host --all-targets
+      - name: Test desktop and browser integration
+        if: ${{ needs.changes.outputs.desktop == 'true' }}
+        run: cargo test --workspace --locked
       - name: Smoke test Windows desktop startup and Store resources
         if: ${{ needs.changes.outputs.desktop == 'true' }}
         shell: powershell
@@ -269,6 +272,9 @@ jobs:
           npm --prefix apps\desktop run tauri -- build --no-bundle
           if ($LASTEXITCODE -ne 0) { throw 'The Windows production desktop smoke build failed.' }
           $executable = Resolve-Path .\target\release\quiver-desktop.exe
+          if (-not (Test-Path -LiteralPath .\target\release\quiver-native-host.exe)) {
+            throw 'The packaged desktop is missing its native browser helper.'
+          }
           $process = Start-Process -FilePath $executable -PassThru
           try {
             if ($process.WaitForExit(8000)) {

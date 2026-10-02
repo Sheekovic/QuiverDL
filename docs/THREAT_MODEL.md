@@ -41,9 +41,9 @@ The bundled UI is trusted application code. Tauri capabilities expose only the r
 
 ### Browser extension and native messaging
 
-Native messages are length-prefixed and capped at 1 MiB. Requests require a random 256-bit pairing token compared in constant time, accept only versioned enqueue actions and HTTP(S) URLs, and write bounded request files with generated identifiers. The token is not written to inbox items or logs. Browser manifests restrict which extensions may launch the host.
+Native messages are length-prefixed and capped at 1 MiB. Firefox's host manifest permits only `quiverdl@quiverdl.app`; the host additionally checks Firefox's extension-ID argument before accepting tokenless enqueue/ping messages. Other invocations still require a random 256-bit pairing token compared in constant time. HTTP(S) and magnet requests become bounded inbox files with generated identifiers. Tokens are never written to inbox items or logs. An accepted Firefox request starts only the desktop executable registered locally by QuiverDL; browser messages cannot choose a program or pass shell arguments.
 
-Manual context-menu capture is the default. Automatic interception is opt-in, constrained by minimum size and an optional exact-domain allowlist, and cancels the browser download only after the native host acknowledges the queue request. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; users should treat the local queue and pairing token as private.
+New Firefox installations capture downloads automatically, with a visible opt-out and optional size/domain filters. Existing saved settings are respected. Chromium keeps its prior opt-in policy. Browser cancellation happens only after native acceptance; failed desktop launch retains the browser download. Regular Firefox requests start through the durable queue, while torrents require file preview and confirmation. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; the local queue remains private.
 
 ### Distributed source metadata
 
