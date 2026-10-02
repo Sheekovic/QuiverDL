@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
-const HOST_NAME: &str = "app.quiverdl.native";
 const MAX_BRIDGE_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_INBOX_ITEM_BYTES: u64 = 1024 * 1024;
 const MAX_INBOX_ENTRIES_SCANNED: usize = 500;
@@ -21,9 +20,8 @@ struct BridgeConfig {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BrowserBridgeInfo {
-    host_name: &'static str,
-    token: String,
-    config_path: String,
+    connected: bool,
+    message: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -33,6 +31,20 @@ pub(crate) struct BrowserInboxItem {
     id: String,
     url: String,
     suggested_filename: Option<String>,
+    #[serde(default)]
+    automatic: bool,
+}
+
+pub(crate) async fn initialize_integration() -> Result<(), String> {
+    let (path, _) = ensure_config().await?;
+    let directory = path.parent().ok_or("Invalid browser folder")?.to_path_buf();
+    let executable = std::env::current_exe().map_err(|_| "Could not locate QuiverDL")?;
+    tokio::task::spawn_blocking(move || {
+        super::desktop_integration::register_file_handlers(&executable)?;
+        super::desktop_integration::register_firefox(&directory, &executable)
+    })
+    .await
+    .map_err(|_| "Browser setup failed")?
 }
 
 fn bridge_directory() -> Result<PathBuf, String> {
@@ -42,6 +54,8 @@ fn bridge_directory() -> Result<PathBuf, String> {
 }
 
 async fn ensure_config() -> Result<(PathBuf, BridgeConfig), String> {
+    static CONFIG_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = CONFIG_LOCK.lock().await;
     let directory = bridge_directory()?;
     let parent = directory
         .parent()
@@ -130,12 +144,10 @@ fn valid_config(config: &BridgeConfig, directory: &std::path::Path) -> bool {
 
 #[tauri::command]
 pub(crate) async fn get_browser_bridge_info() -> Result<BrowserBridgeInfo, String> {
-    let (path, config) = ensure_config().await?;
-    Ok(BrowserBridgeInfo {
-        host_name: HOST_NAME,
-        token: config.token,
-        config_path: path.to_string_lossy().into_owned(),
-    })
+    match initialize_integration().await {
+        Ok(()) => Ok(BrowserBridgeInfo { connected: true, message: "Firefox is ready. Install the QuiverDL Browser Companion and downloads connect automatically.".into() }),
+        Err(message) => Ok(BrowserBridgeInfo { connected: false, message }),
+    }
 }
 
 #[tauri::command]
@@ -206,7 +218,7 @@ async fn quarantine_invalid_entry(
     tokio::fs::rename(path, destination).await
 }
 
-async fn ensure_private_directory(path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) async fn ensure_private_directory(path: &std::path::Path) -> std::io::Result<()> {
     match tokio::fs::create_dir(path).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -247,7 +259,7 @@ fn parse_inbox_item(path: &std::path::Path, bytes: &[u8]) -> Result<BrowserInbox
         serde_json::from_slice(bytes).map_err(|_| "Invalid browser request".to_string())?;
     let valid_url = Url::parse(&request.url)
         .ok()
-        .is_some_and(|url| matches!(url.scheme(), "http" | "https"));
+        .is_some_and(|url| matches!(url.scheme(), "http" | "https" | "magnet"));
     let valid_filename = request.suggested_filename.as_ref().is_none_or(|filename| {
         !filename.is_empty()
             && filename.chars().count() <= MAX_SUGGESTED_FILENAME_CHARS

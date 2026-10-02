@@ -56,12 +56,15 @@ notification behavior, supports durable scheduled starts and parallel or sequent
 supports direct, system, and credential-safe custom proxy routing, and never silently overwrites a
 destination. It also provides an opt-in clipboard monitor, customizable MIME/extension routing,
 yt-dlp media metadata and quality selection, and native magnet transfers with validated HTTPS
-trackers. Remote `.torrent` URLs remain deferred until embedded endpoints can be validated before
-network dispatch.
+trackers. The Torrent / Magnet tab opens local `.torrent` files, previews their file lists and sizes,
+lets users select individual files, and chooses the destination before starting. Remote torrent
+metadata is fetched with bounded size and public-address checks; embedded trackers are validated
+before peer discovery. Magnet file lists can be fetched separately before file selection.
 BitTorrent is an explicit, direct-connection-only action: QuiverDL shows a privacy confirmation
 before starting, rejects System/Custom HTTP proxy modes that cannot cover peer traffic, and disables
 DHT, local discovery, incoming listeners, uploading, and post-completion seeding. Tracker announces
-use a bounded HTTPS-only client with pinned public DNS answers and redirects disabled; only filtered
+support HTTP, HTTPS, and UDP with pinned public DNS answers and HTTP redirects disabled. Private
+tracker passkeys are preserved and failed trackers fall back to another tracker; only filtered
 public peer addresses are handed to the torrent engine.
 
 Media downloading uses the yt-dlp Python API. Install Python 3 and yt-dlp on the machine running
@@ -75,8 +78,10 @@ If Python is not on `PATH`, choose its executable in QuiverDL Settings. Clipboar
 only by the local QuiverDL process while monitoring is enabled; the text never leaves the device
 and is never sent to analytics or another remote service.
 
-Optional Chromium and Firefox companions communicate through an authenticated native host. Manual
-capture is the default; automatic interception is opt-in, local, and constrained by explicit rules.
+Optional Chromium and Firefox companions communicate through a restricted native host. Firefox
+connects automatically after opening a desktop package containing the native helper; its capture
+switch and optional size/domain filters control automatic downloads. Chromium retains manual pairing.
+Settings are grouped into searchable tabs, and the desktop has a dedicated draggable title bar.
 See the [roadmap](ROADMAP.md), [threat model](docs/THREAT_MODEL.md), and
 [release process](docs/RELEASE.md) for the remaining direct-distribution signing step. The
 [safe pause and resume guide](docs/RESUME.md) explains when interrupted bytes are reused, restarted,

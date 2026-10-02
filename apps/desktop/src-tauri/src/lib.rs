@@ -22,11 +22,13 @@ use url::Url;
 
 mod browser_bridge;
 mod clipboard_monitor;
+mod desktop_integration;
 mod media;
 mod persistence;
 mod proxy_credentials;
 mod routing;
 mod torrent;
+mod torrent_file;
 
 use browser_bridge::{acknowledge_browser_request, get_browser_bridge_info, list_browser_requests};
 use clipboard_monitor::{ClipboardMonitor, set_clipboard_monitor_enabled};
@@ -838,7 +840,11 @@ pub fn run() {
         .is_some_and(|config| !config.is_null());
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(
-            |app, _arguments, _working_directory| {
+            |app, arguments, _working_directory| {
+                desktop_integration::accept_arguments(
+                    &app.state::<desktop_integration::OpenRequests>(),
+                    arguments.into_iter().skip(1),
+                );
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -857,7 +863,15 @@ pub fn run() {
         .manage(ClipboardMonitor::default())
         .manage(MediaRegistry::default())
         .manage(TorrentRegistry::default())
+        .manage(desktop_integration::OpenRequests::default())
         .setup(|app| {
+            desktop_integration::accept_arguments(
+                &app.state::<desktop_integration::OpenRequests>(),
+                std::env::args().skip(1),
+            );
+            tauri::async_runtime::spawn(async {
+                let _ = browser_bridge::initialize_integration().await;
+            });
             let app_data_dir = app.path().app_data_dir()?;
             app.manage(PersistentStore::new(&app_data_dir));
             clipboard_monitor::start(app.handle().clone());
@@ -901,6 +915,8 @@ pub fn run() {
             detect_media_url,
             resolve_category_directory,
             resolve_smart_destination,
+            routing::resolve_browser_destination,
+            routing::default_download_directory,
             set_clipboard_monitor_enabled,
             register_download,
             discard_registered_download,
@@ -910,6 +926,9 @@ pub fn run() {
             start_torrent_download,
             control_torrent_download,
             inspect_torrent_source,
+            desktop_integration::take_open_requests,
+            torrent_file::torrent_file_url,
+            torrent::preview_magnet_files,
             control_download,
             set_global_speed_limit,
             load_app_state,

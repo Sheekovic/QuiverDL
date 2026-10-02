@@ -6,7 +6,7 @@ network policy, and security review.
 
 | Area | Metalink | BitTorrent |
 | --- | --- | --- |
-| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | Magnet links with HTTPS trackers after explicit consent; remote `.torrent` URLs deferred |
+| Primary input | RFC 5854 XML; RFC 6249 is evaluated but deferred | Magnets and local/remote `.torrent` files; HTTP/HTTPS/UDP trackers after consent |
 | Network model | Known HTTP(S) mirrors | Trackers and many untrusted peers over additional protocols |
 | Integrity | Publisher-provided size and SHA-256 | BitTorrent piece hashes detect corruption but do not authenticate the publisher |
 | Privacy change | Mirror operators learn requests | Trackers and peers can learn the user's IP address and swarm identifier |

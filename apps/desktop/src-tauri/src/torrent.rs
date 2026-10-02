@@ -92,9 +92,12 @@ pub(crate) struct TorrentSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TorrentInspection {
+    source_url: String,
     name: String,
     source_type: String,
     network_origins: Vec<String>,
+    files: Vec<super::torrent_file::TorrentFileEntry>,
+    total_bytes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,10 +108,42 @@ pub(crate) struct TorrentDownloadRequest {
     destination_directory: String,
     settings: Option<AppSettings>,
     privacy_confirmed: bool,
+    #[serde(default)]
+    selected_files: Option<Vec<usize>>,
 }
 
 #[tauri::command]
-pub(crate) fn inspect_torrent_source(source: String) -> Result<TorrentInspection, String> {
+pub(crate) async fn inspect_torrent_source(
+    source: String,
+    settings: Option<AppSettings>,
+) -> Result<TorrentInspection, String> {
+    if !source.to_ascii_lowercase().starts_with("magnet:") {
+        let parsed =
+            Url::parse(&source).map_err(|_| "Choose a torrent file or paste a magnet link")?;
+        let bytes = if parsed.scheme() == "file" {
+            super::torrent_file::read_local(&source).await?
+        } else if matches!(parsed.scheme(), "http" | "https") {
+            let settings = settings.unwrap_or_default();
+            settings.validate()?;
+            if settings.proxy_mode != "disabled" {
+                return Err("Torrent metadata downloads require Direct connection mode".into());
+            }
+            fetch_torrent_file(parsed).await?
+        } else {
+            return Err("Unsupported torrent source".into());
+        };
+        let meta = super::torrent_file::parse(&bytes)?;
+        validate_magnet_trackers(&meta.magnet)?;
+        let source_url = super::torrent_file::cache(&bytes).await?;
+        return Ok(TorrentInspection {
+            source_url,
+            name: meta.name,
+            source_type: "torrentFile".into(),
+            network_origins: sanitized_network_origins(&meta.magnet),
+            files: meta.files,
+            total_bytes: Some(meta.total.to_string()),
+        });
+    }
     let source = validate_torrent_source(&source)?;
     let (name, source_type) = if source.to_ascii_lowercase().starts_with("magnet:") {
         let parsed = Url::parse(&source).map_err(|_| "The magnet link is invalid".to_string())?;
@@ -129,9 +164,12 @@ pub(crate) fn inspect_torrent_source(source: String) -> Result<TorrentInspection
     };
     let network_origins = sanitized_network_origins(&source);
     Ok(TorrentInspection {
+        source_url: source,
         name,
         source_type: source_type.into(),
         network_origins,
+        files: Vec::new(),
+        total_bytes: None,
     })
 }
 
@@ -163,7 +201,17 @@ pub(crate) async fn start_torrent_download(
         transfer_registry.sequential_queue.clone(),
     )
     .await?;
-    let source = validate_torrent_source(&request.source)?;
+    let (source, torrent_bytes) = if request.source.starts_with("file:") {
+        let bytes = super::torrent_file::read_local(&request.source).await?;
+        let meta = super::torrent_file::parse(&bytes)?;
+        validate_file_selection(request.selected_files.as_deref(), meta.files.len())?;
+        (meta.magnet, Some(bytes))
+    } else {
+        if request.selected_files.is_some() {
+            return Err("Load the magnet file list before selecting files".into());
+        }
+        (validate_torrent_source(&request.source)?, None)
+    };
     let trackers = validate_magnet_trackers(&source)?;
     let approved_trackers = resolve_tracker_addresses(&trackers, &control).await?;
     let initial_peers = fetch_tracker_peers(&source, &approved_trackers, &control).await?;
@@ -215,10 +263,15 @@ pub(crate) async fn start_torrent_download(
         // Each task owns an isolated folder, so rqbit can safely verify and resume its own files.
         overwrite: true,
         initial_peers: Some(initial_peers),
+        only_files: request.selected_files,
         ..AddTorrentOptions::default()
     };
+    let input = match torrent_bytes {
+        Some(bytes) => AddTorrent::from_bytes(bytes),
+        None => AddTorrent::from_url(source.as_str()),
+    };
     let added = tokio::select! {
-        added = session.add_torrent(AddTorrent::from_url(source.as_str()), Some(options)) => added,
+        added = session.add_torrent(input, Some(options)) => added,
         _ = control.cancelled() => {
             session.cancellation_token().cancel();
             return Err("download was cancelled".into());
@@ -334,6 +387,101 @@ fn sanitized_network_origins(source: &str) -> Vec<String> {
     origins
 }
 
+fn validate_file_selection(selection: Option<&[usize]>, count: usize) -> Result<(), String> {
+    if let Some(selection) = selection {
+        let unique = selection.iter().copied().collect::<HashSet<_>>();
+        if selection.is_empty()
+            || selection.len() > count
+            || unique.len() != selection.len()
+            || selection.iter().any(|index| *index >= count)
+        {
+            return Err("Select at least one valid torrent file".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn preview_magnet_files(
+    source: String,
+    settings: Option<AppSettings>,
+    privacy_confirmed: bool,
+) -> Result<TorrentInspection, String> {
+    let settings = settings.unwrap_or_default();
+    settings.validate()?;
+    validate_network_start(&settings, privacy_confirmed)?;
+    let source = validate_torrent_source(&source)?;
+    let control = quiver_core::DownloadControl::default();
+    let trackers = validate_magnet_trackers(&source)?;
+    let approved = resolve_tracker_addresses(&trackers, &control).await?;
+    let peers = fetch_tracker_peers(&source, &approved, &control).await?;
+    let directory = dirs::config_dir()
+        .ok_or("Could not locate the app folder")?
+        .join("QuiverDL")
+        .join(format!(
+            "preview-{}",
+            hex::encode(rand::random::<[u8; 16]>())
+        ));
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|_| "Could not prepare metadata preview")?;
+    let blocklist = directory.join("peer-blocklist");
+    tokio::fs::write(&blocklist, PEER_BLOCKLIST)
+        .await
+        .map_err(|_| "Could not prepare metadata preview")?;
+    let session = Session::new_with_opts(
+        directory.clone(),
+        SessionOptions {
+            dht: None,
+            listen: None,
+            connect: Some(ConnectionOptions::default()),
+            disable_trackers: true,
+            disable_upload: true,
+            disable_local_service_discovery: true,
+            peer_limit: Some(40),
+            blocklist_url: Some(
+                Url::from_file_path(&blocklist)
+                    .map_err(|_| "Invalid preview folder")?
+                    .into(),
+            ),
+            ..SessionOptions::default()
+        },
+    )
+    .await
+    .map_err(|_| "Could not start magnet metadata preview")?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        session.add_torrent(
+            AddTorrent::from_url(source.as_str()),
+            Some(AddTorrentOptions {
+                list_only: true,
+                initial_peers: Some(peers),
+                ..AddTorrentOptions::default()
+            }),
+        ),
+    )
+    .await;
+    session.cancellation_token().cancel();
+    let _ = tokio::fs::remove_file(&blocklist).await;
+    let _ = tokio::fs::remove_dir(&directory).await;
+    let result = result
+        .map_err(|_| "No peers returned the file list within one minute; try again")?
+        .map_err(|_| "Could not retrieve the magnet file list")?;
+    let librqbit::AddTorrentResponse::ListOnly(preview) = result else {
+        return Err("Could not preview magnet metadata".into());
+    };
+    let metadata = super::torrent_file::parse(&preview.torrent_bytes)?;
+    let source_url = super::torrent_file::cache(&preview.torrent_bytes).await?;
+    Ok(TorrentInspection {
+        source_url,
+        name: metadata.name,
+        source_type: "torrentFile".into(),
+        files: metadata.files,
+        total_bytes: Some(metadata.total.to_string()),
+        network_origins: sanitized_network_origins(&source),
+    })
+}
+
 fn validate_network_start(settings: &AppSettings, privacy_confirmed: bool) -> Result<(), String> {
     if !privacy_confirmed {
         return Err("Confirm the BitTorrent privacy disclosure before starting".into());
@@ -398,7 +546,72 @@ fn validate_torrent_source(value: &str) -> Result<String, String> {
         validate_magnet_trackers(value)?;
         return Ok(value.to_owned());
     }
-    Err("Remote .torrent URLs are not enabled until embedded trackers can be validated before network contact; use a magnet with HTTPS trackers".into())
+    Err("Remote .torrent URLs are not enabled until embedded trackers can be validated before network contact; use a magnet with trackers".into())
+}
+
+async fn fetch_torrent_file(mut url: Url) -> Result<Vec<u8>, String> {
+    for _ in 0..6 {
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err("Unsupported torrent URL".into());
+        }
+        let host = url.host_str().ok_or("Torrent URL has no host")?;
+        let port = url
+            .port_or_known_default()
+            .ok_or("Torrent URL has no port")?;
+        let addresses = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        .map_err(|_| "Torrent host lookup timed out")?
+        .map_err(|_| "Could not resolve torrent host")?
+        .collect::<Vec<_>>();
+        if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
+            return Err(
+                "Local torrent URLs are blocked; open a downloaded torrent file instead".into(),
+            );
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(20))
+            .resolve_to_addrs(host, &addresses)
+            .build()
+            .map_err(|_| "Could not prepare torrent download")?;
+        let mut response = client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|_| "Could not fetch torrent metadata")?;
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or("Invalid torrent redirect")?;
+            url = url.join(location).map_err(|_| "Invalid torrent redirect")?;
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err("The server refused the torrent download".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "Could not read torrent metadata")?
+        {
+            if bytes.len().saturating_add(chunk.len()) > super::torrent_file::MAX_TORRENT_BYTES {
+                return Err("Torrent files must be smaller than 8 MB".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        return Ok(bytes);
+    }
+    Err("The torrent download redirected too many times".into())
 }
 
 fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
@@ -407,31 +620,32 @@ fn validate_magnet_trackers(value: &str) -> Result<Vec<Url>, String> {
         return Err("The magnet link is invalid".into());
     }
     let mut trackers = Vec::new();
-    for (key, value) in magnet.query_pairs() {
-        if key != "tr" {
-            continue;
-        }
-        if trackers.len() >= MAX_TRACKERS {
+    for (count, (_, value)) in magnet
+        .query_pairs()
+        .filter(|(key, _)| key == "tr")
+        .enumerate()
+    {
+        if count >= MAX_TRACKERS {
             return Err("The magnet link contains too many trackers".into());
         }
-        let tracker = Url::parse(&value).map_err(|_| "A magnet tracker URL is invalid")?;
-        if tracker.scheme() != "https"
+        let Ok(tracker) = Url::parse(&value) else {
+            continue;
+        };
+        if !matches!(tracker.scheme(), "http" | "https" | "udp")
             || tracker.host().is_none()
-            || !tracker.username().is_empty()
-            || tracker.password().is_some()
-            || tracker.fragment().is_some()
+            || tracker.port_or_known_default().is_none_or(|port| port == 0)
+            || (tracker.scheme() == "udp"
+                && (!tracker.username().is_empty() || tracker.password().is_some()))
+            || tracker.host_str().is_some_and(|host| {
+                host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost")
+            })
         {
-            return Err("Only credential-free HTTPS magnet trackers are supported".into());
-        }
-        if tracker.host_str().is_some_and(|host| {
-            host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost")
-        }) {
-            return Err("Local and special-use magnet tracker addresses are blocked".into());
+            continue;
         }
         trackers.push(tracker);
     }
     if trackers.is_empty() {
-        return Err("A magnet needs at least one HTTPS tracker because DHT is disabled".into());
+        return Err("No supported tracker: use HTTP, HTTPS, or UDP (with a port). DHT is currently disabled".into());
     }
     Ok(trackers)
 }
@@ -445,19 +659,21 @@ async fn resolve_tracker_addresses(
         let host = tracker
             .host_str()
             .ok_or_else(|| "A magnet tracker URL has no host".to_string())?;
-        let port = tracker.port_or_known_default().unwrap_or(443);
+        let port = tracker
+            .port_or_known_default()
+            .ok_or("A tracker port is required")?;
         let addresses = tokio::select! {
             result = tokio::time::timeout(
                 Duration::from_secs(10),
                 tokio::net::lookup_host((host, port)),
-            ) => result
-                .map_err(|_| "A magnet tracker DNS lookup timed out".to_string())?
-                .map_err(|_| "A magnet tracker host could not be resolved".to_string())?
-                .collect::<Vec<_>>(),
+            ) => match result {
+                Ok(Ok(addresses)) => addresses.collect::<Vec<_>>(),
+                _ => continue,
+            },
             _ = control.cancelled() => return Err("download was cancelled".into()),
         };
         if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(address.ip())) {
-            return Err("Local and special-use magnet tracker addresses are blocked".into());
+            continue;
         }
         approved.push((tracker.clone(), addresses));
     }
@@ -478,49 +694,57 @@ async fn fetch_tracker_peers(
     peer_id[..8].copy_from_slice(b"-QD0200-");
     rand::rng().fill_bytes(&mut peer_id[8..]);
 
-    let mut client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(20));
-    for (tracker, addresses) in trackers {
-        let host = tracker
-            .host_str()
-            .ok_or_else(|| "A magnet tracker URL has no host".to_string())?;
-        client = client.resolve_to_addrs(host, addresses);
-    }
-    let client = client
-        .build()
-        .map_err(|_| "Could not create the protected tracker client".to_string())?;
-
     let mut peers = HashSet::new();
-    for (tracker, _) in trackers {
-        let announce = tracker_announce_url(tracker, &info_hash.0, &peer_id)?;
-        let response = tokio::select! {
-            result = client.get(announce).send() => result
-                .map_err(|_| "An HTTPS tracker request failed".to_string())?,
-            _ = control.cancelled() => return Err("download was cancelled".into()),
+    for (tracker, addresses) in trackers {
+        let result = if tracker.scheme() == "udp" {
+            udp::announce(tracker, addresses, &info_hash.0, &peer_id, control).await
+        } else {
+            fetch_http_tracker(tracker, addresses, &info_hash.0, &peer_id, control).await
         };
-        if !response.status().is_success() {
-            return Err(
-                "An HTTPS tracker refused the announce without an approved response".into(),
-            );
+        if let Ok(found) = result {
+            peers.extend(found.into_iter().take(MAX_INITIAL_PEERS - peers.len()));
         }
-        let body = read_bounded_tracker_response(response, control).await?;
-        for peer in parse_tracker_peers(&body)? {
-            if !peers.insert(peer) {
-                continue;
-            }
-            if peers.len() > MAX_INITIAL_PEERS {
-                return Err("A tracker returned too many peers".into());
-            }
+        if !peers.is_empty() {
+            break;
         }
     }
     if peers.is_empty() {
-        return Err("The approved HTTPS trackers returned no usable peers".into());
+        return Err("No tracker returned usable peers; trackers may be unavailable or this torrent has no peers".into());
     }
     Ok(peers.into_iter().collect())
 }
+
+async fn fetch_http_tracker(
+    tracker: &Url,
+    addresses: &[SocketAddr],
+    info_hash: &[u8; 20],
+    peer_id: &[u8; 20],
+    control: &quiver_core::DownloadControl,
+) -> Result<Vec<SocketAddr>, String> {
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .resolve_to_addrs(
+            tracker.host_str().ok_or("Tracker host is missing")?,
+            addresses,
+        )
+        .build()
+        .map_err(|_| "Could not create the tracker client")?;
+    let announce = tracker_announce_url(tracker, info_hash, peer_id)?;
+    let response = tokio::select! {
+        result = client.get(announce).send() => result.map_err(|_| "A tracker request failed")?,
+        _ = control.cancelled() => return Err("download was cancelled".into()),
+    };
+    if !response.status().is_success() {
+        return Err("A tracker refused the announce".into());
+    }
+    parse_tracker_peers(&read_bounded_tracker_response(response, control).await?)
+}
+
+#[path = "torrent_tracker_udp.rs"]
+mod udp;
 
 fn tracker_announce_url(
     tracker: &Url,
@@ -558,7 +782,7 @@ async fn read_bounded_tracker_response(
     loop {
         let chunk = tokio::select! {
             result = response.chunk() => result
-                .map_err(|_| "Could not read the HTTPS tracker response".to_string())?,
+                .map_err(|_| "Could not read the tracker response".to_string())?,
             _ = control.cancelled() => return Err("download was cancelled".into()),
         };
         let Some(chunk) = chunk else {
@@ -574,12 +798,12 @@ async fn read_bounded_tracker_response(
 
 fn parse_tracker_peers(body: &[u8]) -> Result<Vec<SocketAddr>, String> {
     let value: BencodeValueBorrowed<'_> =
-        from_bytes(body).map_err(|_| "The HTTPS tracker response is invalid".to_string())?;
+        from_bytes(body).map_err(|_| "The tracker response is invalid".to_string())?;
     let BencodeValue::Dict(fields) = value else {
-        return Err("The HTTPS tracker response is invalid".into());
+        return Err("The tracker response is invalid".into());
     };
     if fields.keys().any(|key| key.as_ref() == b"failure reason") {
-        return Err("The HTTPS tracker rejected the announce".into());
+        return Err("The tracker rejected the announce".into());
     }
     let mut peers = Vec::new();
     for (key, value) in fields {
@@ -592,7 +816,7 @@ fn parse_tracker_peers(body: &[u8]) -> Result<Vec<SocketAddr>, String> {
             _ => continue,
         };
         if bytes.0.len() % bytes.1 != 0 {
-            return Err("The HTTPS tracker returned malformed peer addresses".into());
+            return Err("The tracker returned malformed peer addresses".into());
         }
         for entry in bytes.0.chunks_exact(bytes.1) {
             let address = if bytes.1 == 6 {
@@ -694,7 +918,10 @@ fn bounded_message(message: &str) -> String {
         .split_whitespace()
         .map(|word| {
             let lower = word.to_ascii_lowercase();
-            if lower.contains("magnet:") || lower.contains("http://") || lower.contains("https://")
+            if lower.contains("magnet:")
+                || lower.contains("http://")
+                || lower.contains("https://")
+                || lower.contains("udp://")
             {
                 "[torrent source]"
             } else {
@@ -710,6 +937,13 @@ fn bounded_message(message: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn torrent_file_selection_is_bounded_and_nonempty() {
+        assert!(super::validate_file_selection(Some(&[0, 2]), 3).is_ok());
+        assert!(super::validate_file_selection(Some(&[]), 3).is_err());
+        assert!(super::validate_file_selection(Some(&[1, 1]), 3).is_err());
+        assert!(super::validate_file_selection(Some(&[3]), 3).is_err());
+    }
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     use super::{
@@ -727,7 +961,7 @@ mod tests {
         assert!(validate_torrent_source("https://example.test/linux.torrent").is_err());
         assert!(
             validate_torrent_source("magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862&tr=udp%3A%2F%2Ftracker.example%3A80")
-                .is_err()
+                .is_ok()
         );
     }
 
@@ -804,5 +1038,83 @@ mod tests {
         assert!(announce.fragment().is_none());
         assert!(announce.query().unwrap().starts_with("passkey=private&"));
         assert!(announce.query().unwrap().contains("info_hash="));
+    }
+
+    #[test]
+    fn mixed_tracker_lists_keep_supported_trackers_and_authentication() {
+        let mut magnet =
+            url::Url::parse("magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862")
+                .unwrap();
+        for tracker in [
+            "wss://unsupported.example/",
+            "http://user:synthetic@tracker.example/announce?passkey=synthetic",
+            "udp://tracker.example:80/announce",
+            "https://localhost/announce",
+        ] {
+            magnet.query_pairs_mut().append_pair("tr", tracker);
+        }
+        let trackers = super::validate_magnet_trackers(magnet.as_str()).unwrap();
+        assert_eq!(trackers.len(), 2);
+        let request = reqwest::Client::new()
+            .get(super::tracker_announce_url(&trackers[0], &[1; 20], &[2; 20]).unwrap())
+            .build()
+            .unwrap();
+        assert!(request.headers().contains_key("authorization"));
+        assert_eq!(request.url().username(), "");
+        assert!(
+            request
+                .url()
+                .query()
+                .unwrap()
+                .starts_with("passkey=synthetic&")
+        );
+        assert_eq!(
+            sanitized_network_origins(magnet.as_str())[0],
+            "http://tracker.example"
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_http_tracker_falls_back_without_public_network() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = server.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            for status in ["503 Unavailable", "200 OK"] {
+                let (mut stream, _) = server.accept().await.unwrap();
+                let mut buf = [0; 4096];
+                let size = stream.read(&mut buf).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&buf[..size]).contains("passkey=synthetic&info_hash=")
+                );
+                let body = b"d5:peers6:\x01\x01\x01\x01\x1a\xe1e";
+                let headers = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(body).await.unwrap();
+            }
+        });
+        let tracker = url::Url::parse(&format!(
+            "http://tracker.invalid:{}/announce?passkey=synthetic",
+            address.port()
+        ))
+        .unwrap();
+        // Supply a loopback fixture directly after the production DNS policy boundary.
+        let trackers = vec![(tracker.clone(), vec![address]), (tracker, vec![address])];
+        let peers = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::fetch_tracker_peers(
+                "magnet:?xt=urn:btih:cab507494d02ebb1178b38f2e9d7be299c86b862",
+                &trackers,
+                &quiver_core::DownloadControl::new(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(peers, ["1.1.1.1:6881".parse().unwrap()]);
+        task.await.unwrap();
     }
 }

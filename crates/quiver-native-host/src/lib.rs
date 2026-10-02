@@ -45,9 +45,12 @@ impl BridgeConfig {
 pub struct BrowserMessage {
     pub version: u8,
     pub action: String,
+    #[serde(default)]
     pub token: String,
     pub url: String,
     pub suggested_filename: Option<String>,
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +68,40 @@ struct InboxRequest {
     id: String,
     url: String,
     suggested_filename: Option<String>,
+    automatic: bool,
+}
+
+/// Firefox supplies the extension ID as the second native-host argument. The
+/// installed manifest also restricts access to this exact companion extension.
+#[must_use]
+pub fn is_firefox_companion(arguments: &[String]) -> bool {
+    arguments.len() == 2 && arguments[1] == "quiverdl@quiverdl.app"
+}
+
+#[must_use]
+pub fn process_firefox_message(config: &BridgeConfig, bytes: &[u8]) -> HostResponse {
+    let Ok(mut message) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return process_message(config, bytes);
+    };
+    if message.get("version").and_then(serde_json::Value::as_u64) == Some(1)
+        && message.get("action").and_then(serde_json::Value::as_str) == Some("ping")
+    {
+        return HostResponse {
+            ok: true,
+            request_id: None,
+            error: None,
+        };
+    }
+    if let Some(fields) = message.as_object_mut() {
+        fields.insert(
+            "token".into(),
+            serde_json::Value::String(config.token.clone()),
+        );
+    }
+    match serde_json::to_vec(&message) {
+        Ok(bytes) => process_message(config, &bytes),
+        Err(_) => process_message(config, &[]),
+    }
 }
 
 #[must_use]
@@ -161,8 +198,8 @@ fn process_message_inner(config: &BridgeConfig, bytes: &[u8]) -> Result<String, 
     if url.as_str().chars().count() > MAX_BROWSER_URL_CHARS {
         return Err("Download URL is too long".into());
     }
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("Only HTTP and HTTPS downloads are accepted".into());
+    if !matches!(url.scheme(), "http" | "https" | "magnet") {
+        return Err("Only HTTP, HTTPS and magnet downloads are accepted".into());
     }
     let id = Uuid::new_v4().to_string();
     let request = InboxRequest {
@@ -173,6 +210,7 @@ fn process_message_inner(config: &BridgeConfig, bytes: &[u8]) -> Result<String, 
             .suggested_filename
             .as_deref()
             .and_then(sanitize_filename),
+        automatic: message.automatic,
     };
     write_inbox_request(&config.inbox_dir, &request).map_err(|_| "Could not queue download")?;
     Ok(id)
@@ -256,6 +294,44 @@ fn validate_private_directory(path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn firefox_authentication_is_scoped_and_requires_no_user_token() {
+        use super::*;
+        assert!(is_firefox_companion(&[
+            "manifest.json".into(),
+            "quiverdl@quiverdl.app".into()
+        ]));
+        assert!(!is_firefox_companion(&[]));
+        assert!(!is_firefox_companion(&[
+            "manifest.json".into(),
+            "other@example.test".into()
+        ]));
+        let temporary = tempfile::tempdir().unwrap();
+        let config = BridgeConfig {
+            token: "ab".repeat(32),
+            inbox_dir: temporary.path().join("inbox"),
+        };
+        let message = br#"{"version":1,"action":"enqueue","url":"magnet:?xt=urn:btih:0123456789012345678901234567890123456789","automatic":true}"#;
+        assert!(!process_message(&config, message).ok);
+        let response = process_firefox_message(&config, message);
+        assert!(response.ok);
+        let bytes = std::fs::read(
+            config
+                .inbox_dir
+                .join(format!("{}.json", response.request_id.unwrap())),
+        )
+        .unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(request["automatic"], true);
+        assert!(process_firefox_message(&config, br#"{"version":1,"action":"ping"}"#).ok);
+        assert!(
+            !process_firefox_message(
+                &config,
+                br#"{"version":1,"action":"enqueue","url":"file:///private.txt"}"#
+            )
+            .ok
+        );
+    }
     use std::{io::Cursor, path::Path};
 
     use super::{
