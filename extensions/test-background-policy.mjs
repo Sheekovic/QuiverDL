@@ -37,7 +37,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
       onInstalled: { addListener() {} },
       async sendNativeMessage() {
         nativeMessages += 1;
-        return { ok: accepted };
+        return { ok: accepted, requestId: accepted ? "fixture-request" : null };
       },
     },
     storage: {
@@ -57,6 +57,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
   vm.runInNewContext(source, {
     URL,
+    quiverTransport: { send: (...args) => api.runtime.sendNativeMessage(...args) },
     chrome: api,
     console,
     setTimeout,
@@ -98,6 +99,11 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onCreated({ id: 103, url: "https://example.test/file", totalBytes: 1000 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(cancellations, 3, "Firefox retains a download when the desktop rejects it");
+    const attemptsBeforeChange = nativeMessages;
+    downloadedItem = { id: 103, url: "https://example.test/file", totalBytes: 1000 };
+    onChanged({ id: 103, filename: { current: "file.bin" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, attemptsBeforeChange, "A failed or ambiguous handoff is not resubmitted by a change event");
     accepted = true;
     settings.interceptionEnabled = false;
     onCreated({ id: 104, url: "https://example.test/file", totalBytes: 1000 });
@@ -111,5 +117,16 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onClicked({ menuItemId: "quiverdl-download", linkUrl: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(nativeMessages, previousMessages + 1, "Magnet context-menu links reach QuiverDL");
+    vm.runInNewContext(source, {
+      URL, quiverTransport: { send: (...args) => api.runtime.sendNativeMessage(...args) },
+      chrome: api, console, setTimeout,
+    });
+    const beforeRestart = nativeMessages;
+    onCreated({ id: 100, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, beforeRestart, "Background restart remembers an attempted download");
+    onCreated({ id: 100, startTime: "2026-10-07T12:00:00Z", url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, beforeRestart + 1, "A reused ID with a new creation time remains eligible");
   }
 }

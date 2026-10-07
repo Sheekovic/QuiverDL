@@ -1,7 +1,21 @@
 const api = globalThis.browser ?? globalThis.chrome;
-const HOST = "app.quiverdl.native";
 const pending = new Set();
 const handled = new Set();
+let claims = Promise.resolve();
+
+function claimDownload(item) {
+  // Include creation time so IDs reused by a later browser session do not
+  // suppress unrelated downloads. No source URL is retained.
+  const key = `${item.id}:${item.startTime ?? ""}`;
+  const claim = claims.then(async () => {
+    const { quiverAttemptedDownloads = [] } = await api.storage.local.get({ quiverAttemptedDownloads: [] });
+    if (quiverAttemptedDownloads.includes(key)) return false;
+    await api.storage.local.set({ quiverAttemptedDownloads: [...quiverAttemptedDownloads.slice(-999), key] });
+    return true;
+  });
+  claims = claim.catch(() => {});
+  return claim;
+}
 
 api.runtime.onInstalled.addListener(() => {
   api.contextMenus.create({ id: "quiverdl-download", title: "Download with QuiverDL", contexts: ["link"] });
@@ -20,14 +34,14 @@ async function report(connected, message) {
 
 async function enqueue(url, suggestedFilename) {
   try {
-    const response = await api.runtime.sendNativeMessage(HOST, {
+    const response = await globalThis.quiverTransport.send({
       version: 1, action: "enqueue", url, suggestedFilename: suggestedFilename || null, automatic: true,
     });
-    if (!response?.ok) throw new Error("QuiverDL could not accept the download");
+    if (!response?.ok || typeof response.requestId !== "string" || !response.requestId) throw new Error("QuiverDL could not accept the download");
     await report(true, "Connected to QuiverDL").catch(() => {});
     return response;
   } catch {
-    await report(false, "Open the updated QuiverDL app once, then try again. Firefox keeps downloads when QuiverDL is unavailable.").catch(() => {});
+    await report(false, "Open QuiverDL. Firefox keeps downloads when QuiverDL is unavailable.").catch(() => {});
     return { ok: false };
   }
 }
@@ -49,10 +63,13 @@ async function capture(item) {
     const hostname = new URL(item.url).hostname.toLowerCase();
     if (current.allowedDomains.length > 0 && !current.allowedDomains.includes(hostname)) return;
     const filename = item.filename?.split(/[\\/]/).pop() || (torrent ? "download.torrent" : null);
+    // Once a handoff is attempted, later filename/size events must not retry
+    // a request whose acknowledgement may have been lost.
+    if (!await claimDownload(item)) return;
+    handled.add(item.id);
+    if (handled.size > 1000) handled.delete(handled.values().next().value);
     const response = await enqueue(item.finalUrl || item.url, filename);
     if (response.ok) {
-      handled.add(item.id);
-      if (handled.size > 1000) handled.delete(handled.values().next().value);
       await api.downloads.cancel(item.id);
     }
   } catch {

@@ -9,6 +9,8 @@ use subtle::ConstantTimeEq;
 use url::Url;
 use uuid::Uuid;
 
+pub mod loopback;
+
 const MAX_MESSAGE_BYTES: u32 = 1024 * 1024;
 const MAX_CONFIG_BYTES: u64 = 16 * 1024;
 const MAX_BROWSER_URL_CHARS: usize = 8 * 1024;

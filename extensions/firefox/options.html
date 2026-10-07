@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="options.css">
 <main>
   <h1>Download with QuiverDL</h1>
-  <p>Open QuiverDL once after installation. Firefox connects automatically.</p>
+  <p>Firefox connects automatically. Keep QuiverDL running in the tray.</p>
   <label><input id="enabled" type="checkbox"> Download through QuiverDL</label>
   <p>When QuiverDL is unavailable, your download stays in Firefox.</p>
   <details><summary>Download rules</summary>
@@ -16,5 +16,6 @@
   <button id="check" type="button">Check connection</button>
   <output id="status" role="status"></output>
 </main>
+<script src="transport.js"></script>
 <script src="options.js"></script>
 </html>

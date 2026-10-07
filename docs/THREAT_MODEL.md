@@ -43,7 +43,32 @@ The bundled UI is trusted application code. Tauri capabilities expose only the r
 
 Native messages are length-prefixed and capped at 1 MiB. Firefox's host manifest permits only `quiverdl@quiverdl.app`; the host additionally checks Firefox's extension-ID argument before accepting tokenless enqueue/ping messages. Other invocations still require a random 256-bit pairing token compared in constant time. HTTP(S) and magnet requests become bounded inbox files with generated identifiers. Tokens are never written to inbox items or logs. An accepted Firefox request starts only the desktop executable registered locally by QuiverDL; browser messages cannot choose a program or pass shell arguments.
 
-New Firefox installations capture downloads automatically, with a visible opt-out and optional size/domain filters. Existing saved settings are respected. Chromium keeps its prior opt-in policy. Browser cancellation happens only after native acceptance; failed desktop launch retains the browser download. Regular Firefox requests start through the durable queue, while torrents require file preview and confirmation. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; the local queue remains private.
+New Firefox installations capture downloads automatically, with a visible opt-out and optional size/domain filters. Existing saved settings are respected. Chromium keeps its prior opt-in policy. Browser cancellation happens only after an acknowledged queue write; failed desktop launch retains the browser download. Regular Firefox requests start through the durable queue, while torrents require file preview and confirmation. The extension does not transmit cookies, authorization headers, page contents, history, or telemetry. URLs themselves can contain secrets; the local queue remains private.
+
+### Store browser transport
+
+MSIX instances use an automatic IPv4-loopback HTTP endpoint instead of installing a native
+host. Firefox's declared localhost permission allows the background extension to establish
+an in-memory session without user-entered codes. Sessions expire after one hour and rotate
+on restart. This is not exclusive addon authentication: other localhost-permitted extensions
+and local programs can connect or impersonate the service. No browser cookies or authorization
+headers are forwarded. The API exposes only session establishment and ping/enqueue.
+
+Every endpoint requires an exact numeric Host, JSON content type, and a non-safelisted
+`X-QuiverDL-Connector` header. Ordinary website and null origins are rejected; no CORS
+permission is granted. Session authorization uses constant-time comparison. Body reads
+are bounded and timed; message rate and pending queue size are capped. Requests cannot
+launch executables, read files/history, or choose arbitrary destination paths. Queue writes
+are durable before acknowledgment. Extension responses are bounded while streaming.
+
+The extension remembers a selected Store transport, rejects redirects, and never switches
+to native messaging after a Store failure. Only initial discovery can select native messaging
+when the localhost service is unreachable. An explicit pre-mutation 401 permits one automatic
+session refresh; ambiguous handoffs are never retried. Download IDs and creation times already attempted are
+remembered (bounded to the latest 1000) to suppress repeat Firefox change events, including
+a background restart. There is no general durable idempotency protocol: after a lost
+acknowledgment Firefox retains its copy and QuiverDL may already have accepted the request.
+QuiverDL must remain running in the tray. See [the research](BROWSER_INTEGRATION_RESEARCH.md).
 
 ### Distributed source metadata
 

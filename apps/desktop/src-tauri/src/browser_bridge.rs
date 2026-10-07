@@ -35,8 +35,41 @@ pub(crate) struct BrowserInboxItem {
     automatic: bool,
 }
 
+pub(crate) fn is_packaged() -> bool {
+    #[cfg(windows)]
+    {
+        let mut length = 0;
+        // A size query does not dereference the null output buffer. Fail closed
+        // for unexpected API errors: never register a host from a packaged app.
+        let result = unsafe {
+            windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName(
+                &mut length,
+                std::ptr::null_mut(),
+            )
+        };
+        result != 15700 // APPMODEL_ERROR_NO_PACKAGE
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 pub(crate) async fn initialize_integration() -> Result<(), String> {
     let (path, _) = ensure_config().await?;
+    if is_packaged() {
+        static SERVER: tokio::sync::OnceCell<tokio::task::JoinHandle<std::io::Result<()>>> =
+            tokio::sync::OnceCell::const_new();
+        let server = SERVER.get_or_try_init(|| async {
+            let listener = quiver_native_host::loopback::bind().await
+                .map_err(|_| "Browser connection port is busy. Close another QuiverDL instance and try again.".to_string())?;
+            Ok::<_, String>(tokio::spawn(quiver_native_host::loopback::serve(listener, path)))
+        }).await?;
+        if server.is_finished() {
+            return Err("Browser connection stopped. Restart QuiverDL.".into());
+        }
+        return Ok(());
+    }
     let directory = path.parent().ok_or("Invalid browser folder")?.to_path_buf();
     let executable = std::env::current_exe().map_err(|_| "Could not locate QuiverDL")?;
     tokio::task::spawn_blocking(move || {
@@ -48,6 +81,32 @@ pub(crate) async fn initialize_integration() -> Result<(), String> {
 }
 
 fn bridge_directory() -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    if is_packaged() {
+        use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFamilyName;
+        let mut length = 0;
+        // Query the required buffer length, then read our own package identity.
+        if unsafe { GetCurrentPackageFamilyName(&mut length, std::ptr::null_mut()) } != 122
+            || length == 0
+            || length > 256
+        {
+            return Err("Could not locate Store app data".into());
+        }
+        let mut family = vec![0_u16; length as usize];
+        if unsafe { GetCurrentPackageFamilyName(&mut length, family.as_mut_ptr()) } != 0 {
+            return Err("Could not read Store package identity".into());
+        }
+        let family = String::from_utf16(&family[..length as usize - 1])
+            .map_err(|_| "Invalid Store package identity")?;
+        return dirs::data_local_dir()
+            .map(|base| {
+                base.join("Packages")
+                    .join(family)
+                    .join("LocalState")
+                    .join("BrowserBridge")
+            })
+            .ok_or_else(|| "Could not locate Store app data".into());
+    }
     dirs::config_dir()
         .map(|directory| directory.join("QuiverDL"))
         .ok_or_else(|| "Could not locate the user configuration directory".into())
@@ -144,10 +203,22 @@ fn valid_config(config: &BridgeConfig, directory: &std::path::Path) -> bool {
 
 #[tauri::command]
 pub(crate) async fn get_browser_bridge_info() -> Result<BrowserBridgeInfo, String> {
-    match initialize_integration().await {
-        Ok(()) => Ok(BrowserBridgeInfo { connected: true, message: "Firefox is ready. Install the QuiverDL Browser Companion and downloads connect automatically.".into() }),
-        Err(message) => Ok(BrowserBridgeInfo { connected: false, message }),
+    if let Err(message) = initialize_integration().await {
+        return Ok(BrowserBridgeInfo {
+            connected: false,
+            message,
+        });
     }
+    if is_packaged() {
+        return Ok(BrowserBridgeInfo {
+            connected: true,
+            message: "Firefox connects automatically while QuiverDL is running in the tray. Install the QuiverDL Browser Companion. Downloads stay in Firefox when QuiverDL is unavailable.".into(),
+        });
+    }
+    Ok(BrowserBridgeInfo {
+        connected: true,
+        message: "Firefox is ready. Install the QuiverDL Browser Companion and downloads connect automatically.".into(),
+    })
 }
 
 #[tauri::command]

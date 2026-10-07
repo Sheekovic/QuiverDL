@@ -18,6 +18,11 @@ $tauriConfigPath = Join-Path $tauriDirectory 'tauri.conf.json'
 $manifestTemplatePath = Join-Path $packagingRepository 'packaging\windows\msix\AppxManifest.xml.template'
 $iconDirectory = Join-Path $desktopDirectory 'src-tauri\icons'
 
+# This manifest requires application changes, not a packaging-only recovery of v0.4.0.
+if (-not (Test-Path -LiteralPath (Join-Path $repository 'crates\quiver-native-host\src\loopback.rs') -PathType Leaf)) {
+    throw 'This Store manifest requires a release containing the automatic browser transport. Do not reuse an older release tag.'
+}
+
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repository 'dist\store'
 }
@@ -47,10 +52,6 @@ if (-not $ExecutablePath) {
 }
 if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
     throw "Desktop executable not found: $ExecutablePath"
-}
-$nativeHostPath = Join-Path (Split-Path -Parent $ExecutablePath) 'quiver-native-host.exe'
-if (-not (Test-Path -LiteralPath $nativeHostPath -PathType Leaf)) {
-    throw "Required browser companion helper not found: $nativeHostPath"
 }
 if (-not (Test-Path -LiteralPath $manifestTemplatePath -PathType Leaf)) {
     throw "MSIX manifest template not found: $manifestTemplatePath"
@@ -104,11 +105,7 @@ try {
 
     $resourceRoot = [IO.Path]::GetFullPath($tauriDirectory)
     $resourceRootPrefix = $resourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    Copy-Item -LiteralPath $nativeHostPath -Destination (Join-Path $stageDirectory 'quiver-native-host.exe')
-    $packagedResources = @([pscustomobject]@{
-        RelativePath = 'quiver-native-host.exe'
-        SourcePath = $nativeHostPath
-    })
+    $packagedResources = @()
     $resourceEntries = @()
     if ($null -ne $tauriConfig.bundle -and $null -ne $tauriConfig.bundle.resources) {
         $resourceEntries = @($tauriConfig.bundle.resources)

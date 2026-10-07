@@ -21,7 +21,13 @@ document.querySelector("#save").addEventListener("click", async () => {
 });
 document.querySelector("#check").addEventListener("click", async () => {
   try {
-    const response = await api.runtime.sendNativeMessage("app.quiverdl.native", { version: 1, action: "ping" });
+    const origins = ["http://127.0.0.1/*"];
+    if (!await api.permissions.contains({ origins }) &&
+        !await api.permissions.request({ origins })) {
+      status.textContent = "Allow the local connection to use the Store app.";
+      return;
+    }
+    const response = await globalThis.quiverTransport.send({ version: 1, action: "ping" });
     status.textContent = response?.ok ? "Connected to QuiverDL." : "Update and open QuiverDL, then try again.";
   } catch {
     status.textContent = "Open the updated QuiverDL app once, then try again.";

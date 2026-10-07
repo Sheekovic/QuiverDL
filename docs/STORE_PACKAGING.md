@@ -23,7 +23,7 @@ through addons.mozilla.org or sign it with `web-ext sign`; an unsigned ZIP is no
 The owner must also supply the marketplace listing assets outside the ZIP, including the required
 Chrome screenshot and promotional tile, and keep the homepage and privacy-policy URLs current.
 Before publishing, set the final Chromium store ID in the native-host allowlist, rebuild the native
-host packages, test explicit pairing, and confirm that the store privacy disclosures match
+host packages, test automatic connection, and confirm that the store privacy disclosures match
 `docs/privacy/index.html`. QuiverDL never supplies cookies, headers, page contents, history, or
 telemetry to the companion.
 
@@ -89,8 +89,8 @@ certification and controls when an accepted update becomes available to Store us
 The existing `tauri.microsoftstore.conf.json` and `prepare-microsoft-store-config.ps1` remain only
 for the alternative linked EXE/MSI Store route. That route still needs the owner's Authenticode
 certificate because Microsoft does not re-sign linked installers. Browser native-messaging
-registration is not included in the MSIX: the browser companion remains available with QuiverDL's
-direct Windows packages until an MSIX-compatible registration design is implemented.
+registration is not included in the MSIX: Store installations use the automatic localhost
+connector described below, while direct installations retain native messaging.
 
 ## Snap Store
 
@@ -139,17 +139,38 @@ does not exactly match the validated desktop and extension versions.
 Manual Store runs on `main` build application code from the validated immutable release
 tag, and use the packaging script and MSIX manifest from the immutable workflow commit.
 This allows a packaging-only correction without changing an already published release tag.
-The packager requires `quiver-native-host.exe` beside the desktop executable and checks
-both the helper and configured resources by SHA-256 after unpacking the MSIX.
+The automatic browser transport requires a new application release and a matching Firefox
+extension release. It cannot be applied to the old v0.4.0 binary as a packaging-only fix.
+The packager rejects source trees without the automatic transport, includes configured Tauri
+resources, and verifies their hashes after unpacking. It does not ship a native browser helper.
 
 The Store manifest declares `.torrent` and `magnet:` handlers with quoted command-line
-arguments. On Windows 11, narrowly scoped virtualization exclusions expose only
-`%APPDATA%\QuiverDL` and QuiverDL's Firefox native-messaging registration key to external
-processes. Firefox's helper needs these shared files to discover and authenticate to the
-running desktop app. The `unvirtualizedResources` capability is required for those
-exclusions; the rest of HKCU and AppData remain virtualized. These shared integration
-files and the registration can persist after uninstall. This capability's certification
-justification is interoperability with the user-installed Firefox browser companion,
-not unrestricted registry or filesystem access.
+arguments. It requests `runFullTrust` for the desktop application but does not request
+`unvirtualizedResources`, exclude AppData or registry locations from virtualization, or
+register Firefox native messaging. Package identity is detected with
+`GetCurrentPackageFullName`; packaged instances use the automatic transport, and unpackaged
+instances retain their native host integration. Store browser state lives under
+`%LOCALAPPDATA%\Packages\<package-family>\LocalState\BrowserBridge`, separately from
+any old shared `%APPDATA%\QuiverDL` files.
 
-Reference: https://learn.microsoft.com/windows/msix/desktop/flexible-virtualization
+Firefox connects automatically with its declared IPv4 localhost host permission. No code
+copying or Connect step is needed. Keep QuiverDL running, including hidden in the tray.
+It listens only on `127.0.0.1:47831`; settings report port conflicts. No loopback exemption
+utility is invoked. Explicitly quitting QuiverDL leaves new downloads in Firefox. A revoked
+or missing permission can be restored through Check connection in the extension settings.
+
+A guarded bootstrap establishes a session in memory. Custom headers, Host, Origin, content
+type, body size, message rate, URLs, and queue limits are checked; no CORS access is granted.
+This blocks ordinary websites, not other privileged extensions or local programs. The
+limited API does not expose files, history, cookies, credentials, or arbitrary commands.
+An acknowledgment follows the durable inbox write. Once Store transport is selected,
+failures never send the download to a different native installation. Session expiration or
+an app restart reconnects automatically; ambiguous enqueue failures are not retried.
+
+Before submission, test a clean Windows 11 MSIX install with normal Firefox and Store
+Firefox: connect automatically, enqueue with the window open and hidden, quit and verify Firefox retains its
+download, restart and confirm automatic reconnection, test upgrade and uninstall, and verify the Firefox key
+and shared AppData helper are not created. Check the final package manifest and submitted
+artifact hash. Local unit/integration tests do not establish Store approval or replace this
+installed-package verification. Old unvirtualized files from previous builds can remain;
+this change does not delete user data or modify a direct installation's registration.
