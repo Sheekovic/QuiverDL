@@ -6,6 +6,9 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   let onCreated;
   let onChanged;
   let onClicked;
+  let onAction;
+  let onInstalled;
+  let permissionGranted = true;
   let downloadedItem;
   let accepted = true;
   let nativeMessages = 0;
@@ -17,6 +20,11 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     allowedDomains: [],
   };
   const api = {
+    permissions: {
+      async contains() { return permissionGranted; },
+      async request() { permissionGranted = true; return true; },
+      onRemoved: { addListener() {} },
+    },
     contextMenus: {
       create() {},
       onClicked: { addListener(listener) { onClicked = listener; } },
@@ -34,7 +42,8 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
       },
     },
     runtime: {
-      onInstalled: { addListener() {} },
+      onInstalled: { addListener(listener) { onInstalled = listener; } },
+      async openOptionsPage() {},
       async sendNativeMessage() {
         nativeMessages += 1;
         return { ok: accepted, requestId: accepted ? "fixture-request" : null };
@@ -49,7 +58,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
       },
     },
     action: {
-      onClicked: { addListener() {} },
+      onClicked: { addListener(listener) { onAction = listener; } },
       async setBadgeText() {},
       async setTitle() {},
     },
@@ -128,5 +137,22 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onCreated({ id: 100, startTime: "2026-10-07T12:00:00Z", url: "https://example.test/file", totalBytes: 1000 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(nativeMessages, beforeRestart + 1, "A reused ID with a new creation time remains eligible");
+    permissionGranted = false;
+    accepted = false;
+    onInstalled({ reason: "update", previousVersion: "0.4.0" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.match(settings.connectionStatus, /toolbar button/);
+    const beforeConsent = cancellations;
+    onCreated({ id: 200, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent, "Missing upgrade permission retains Firefox's download");
+    assert.equal(settings.quiverAttemptedDownloads.includes("200:"), false, "Missing permission does not claim a download");
+    accepted = true;
+    onAction();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(permissionGranted, true, "Toolbar gesture grants the upgrade permission");
+    onCreated({ id: 200, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent + 1, "Capture resumes after upgrade consent without a pairing code");
   }
 }
