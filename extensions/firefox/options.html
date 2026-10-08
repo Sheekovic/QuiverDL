@@ -12,6 +12,15 @@
     <label>Minimum file size (MB, 0 means all sizes)<input id="minimum" type="number" min="0" max="100000"></label>
     <label>Only capture these domains (leave empty for all sites)<textarea id="domains" rows="4"></textarea></label>
   </details>
+  <details><summary>Installation choice</summary>
+    <label>Connect to
+      <select id="connection-mode">
+        <option value="auto">Automatically detect QuiverDL</option>
+        <option value="native">Direct installation (outside Microsoft Store)</option>
+      </select>
+    </label>
+    <p>Use this when moving between installations. Choosing automatic detection again clears the previous Store selection.</p>
+  </details>
   <button id="save">Save</button>
   <button id="check" type="button">Check connection</button>
   <output id="status" role="status"></output>

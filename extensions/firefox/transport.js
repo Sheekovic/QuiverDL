@@ -4,6 +4,10 @@ globalThis.quiverTransport = (() => {
   const base = "http://127.0.0.1:47831/v1/";
   let token;
   let connecting;
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && (changes.quiverConnectionMode ||
+        (changes.quiverStoreTransport && !changes.quiverStoreTransport.newValue))) token = undefined;
+  });
   class Unavailable extends Error {}
   async function request(path, message, credential) {
     return fetch(base + path, {
@@ -54,7 +58,11 @@ globalThis.quiverTransport = (() => {
     return connecting;
   }
   return { async send(message) {
-    const stored = await api.storage.local.get(["quiverStoreTransport", "storePairingCode"]);
+    const stored = await api.storage.local.get(["quiverConnectionMode", "quiverStoreTransport", "storePairingCode"]);
+    // Only an explicit settings choice may select a different installation.
+    if (stored.quiverConnectionMode === "native") {
+      return api.runtime.sendNativeMessage("app.quiverdl.native", message);
+    }
     const storeSelected = stored.quiverStoreTransport || Boolean(stored.storePairingCode);
     if (storeSelected) await api.storage.local.set({ quiverStoreTransport: true });
     if (stored.storePairingCode) await api.storage.local.remove("storePairingCode");

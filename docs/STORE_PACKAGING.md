@@ -141,7 +141,8 @@ tag, and use the packaging script and MSIX manifest from the immutable workflow 
 This allows a packaging-only correction without changing an already published release tag.
 The automatic browser transport requires a new application release and a matching Firefox
 extension release. It cannot be applied to the old v0.4.0 binary as a packaging-only fix.
-The packager rejects source trees without the automatic transport, includes configured Tauri
+The packager always builds the selected source and does not accept external executables or
+a skip-build option. It rejects source trees without the automatic transport, includes configured Tauri
 resources, and verifies their hashes after unpacking. It does not ship a native browser helper.
 
 The Store manifest declares `.torrent` and `magnet:` handlers with quoted command-line
@@ -174,3 +175,7 @@ and shared AppData helper are not created. Check the final package manifest and 
 artifact hash. Local unit/integration tests do not establish Store approval or replace this
 installed-package verification. Old unvirtualized files from previous builds can remain;
 this change does not delete user data or modify a direct installation's registration.
+
+For migration or coexistence, Firefox settings provide an explicit installation choice.
+Direct installation selects native messaging; selecting automatic detection again clears the
+previous Store selection. Ordinary connection failures never change this choice automatically.

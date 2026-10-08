@@ -12,7 +12,7 @@ function fixture({ stored = {}, sessionError, messageError, responses = [] } = {
     browser: { storage: { local: {
       async get() { return { ...stored }; }, async set(v) { Object.assign(stored,v); },
       async remove(k) { delete stored[k]; },
-    } }, runtime: { async sendNativeMessage() { native++; return ack; } } },
+    }, onChanged: { addListener() {} } }, runtime: { async sendNativeMessage() { native++; return ack; } } },
     async fetch(url, options) {
       requests.push({url,options});
       if (url.endsWith('/session')) {
@@ -41,6 +41,12 @@ test('automatic session and handoff require no stored code',async()=>{
 test('missing service preserves native installations on initial discovery',async()=>{
   const f=fixture({sessionError:new TypeError('offline')});await f.send(message);
   assert.equal(f.native(),1);
+});
+test('explicit installation choice permits migration without automatic failover',async()=>{
+  const f=fixture({stored:{quiverStoreTransport:true,quiverConnectionMode:'native'}});
+  await f.send(message);
+  assert.equal(f.native(),1);
+  assert.equal(f.requests.length,0);
 });
 test('previous Store connection and obsolete pairing setting never select native',async()=>{
   for(const stored of [{quiverStoreTransport:true},{storePairingCode:token}]){

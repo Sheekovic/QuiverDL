@@ -1,9 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $RepositoryRoot,
-    [string] $ExecutablePath,
-    [string] $OutputDirectory,
-    [switch] $SkipBuild
+    [string] $OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,29 +25,26 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repository 'dist\store'
 }
 
-if (-not $SkipBuild) {
-    if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
-        $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
-        $cargoPath = Join-Path $cargoDirectory 'cargo.exe'
-        if (-not (Test-Path -LiteralPath $cargoPath -PathType Leaf)) {
-            throw 'cargo.exe was not found. Install the stable Rust toolchain with rustup.'
-        }
-        $env:PATH = "$cargoDirectory;$env:PATH"
+# Always build the selected source. External or stale executables are not accepted.
+if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+    $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
+    $cargoPath = Join-Path $cargoDirectory 'cargo.exe'
+    if (-not (Test-Path -LiteralPath $cargoPath -PathType Leaf)) {
+        throw 'cargo.exe was not found. Install the stable Rust toolchain with rustup.'
     }
-    Push-Location $desktopDirectory
-    try {
-        & npm.cmd run tauri -- build --no-bundle
-        if ($LASTEXITCODE -ne 0) {
-            throw 'The Tauri release build failed.'
-        }
-    } finally {
-        Pop-Location
-    }
+    $env:PATH = "$cargoDirectory;$env:PATH"
 }
+Push-Location $desktopDirectory
+try {
+    & npm.cmd run tauri -- build --no-bundle
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The Tauri release build failed.'
+    }
+} finally {
+    Pop-Location
+}
+$ExecutablePath = Join-Path $repository 'target\release\quiver-desktop.exe'
 
-if (-not $ExecutablePath) {
-    $ExecutablePath = Join-Path $repository 'target\release\quiver-desktop.exe'
-}
 if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
     throw "Desktop executable not found: $ExecutablePath"
 }

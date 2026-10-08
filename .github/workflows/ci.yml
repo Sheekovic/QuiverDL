@@ -287,7 +287,5 @@ jobs:
           }
           $packageOutput = Join-Path $env:RUNNER_TEMP 'quiverdl-store-smoke'
           .\scripts\package-msix.ps1 `
-            -ExecutablePath $executable `
-            -OutputDirectory $packageOutput `
-            -SkipBuild
+            -OutputDirectory $packageOutput
 

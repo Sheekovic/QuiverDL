@@ -3,6 +3,13 @@ const enabled = document.querySelector("#enabled");
 const minimum = document.querySelector("#minimum");
 const domains = document.querySelector("#domains");
 const status = document.querySelector("#status");
+const connectionMode = document.querySelector("#connection-mode");
+api.storage.local.get({ quiverConnectionMode: "auto" }).then((value) => { connectionMode.value = value.quiverConnectionMode; });
+connectionMode.addEventListener("change", async () => {
+  await api.storage.local.set({ quiverConnectionMode: connectionMode.value, quiverStoreTransport: false });
+  await api.storage.local.remove("storePairingCode");
+  status.textContent = "Installation choice saved. The next download will use this choice.";
+});
 api.storage.local.get({ interceptionEnabled: true, minimumBytes: 0, allowedDomains: [], connectionStatus: "" }).then((value) => {
   enabled.checked = value.interceptionEnabled;
   minimum.value = value.minimumBytes / 1024 / 1024;
