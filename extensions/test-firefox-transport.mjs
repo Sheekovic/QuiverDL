@@ -66,6 +66,7 @@ test('malformed and oversized acknowledgements fail closed',async()=>{
 
 test('settings requests missing permission directly in the click gesture', async () => {
   const optionsSource = await readFile(new URL("firefox/options.js", import.meta.url), "utf8");
+  for (const granted of [true, false]) {
   const nodes = new Map();
   let requested = false;
   const context = {
@@ -77,7 +78,7 @@ test('settings requests missing permission directly in the click gesture', async
       storage: { local: { async get(defaults) { return defaults; } } },
       permissions: {
         contains() { assert.fail("Permission request must not follow an asynchronous permission check"); },
-        request() { requested = true; return Promise.resolve(true); },
+        request() { requested = true; return Promise.resolve(granted); },
       },
     },
     quiverTransport: { async send() { return { ok: true }; } },
@@ -87,4 +88,5 @@ test('settings requests missing permission directly in the click gesture', async
   assert.equal(requested, true, "Permission request happens synchronously with the click");
   await completed;
   assert.equal(nodes.get("#status").textContent, "Connected to QuiverDL.");
+  }
 });

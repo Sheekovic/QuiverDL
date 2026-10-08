@@ -20,16 +20,15 @@ document.querySelector("#save").addEventListener("click", async () => {
   status.textContent = enabled.checked ? "Downloads will open in QuiverDL." : "Downloads will stay in Firefox.";
 });
 document.querySelector("#check").addEventListener("click", async () => {
+  let granted = false;
   try {
     const origins = ["http://127.0.0.1/*"];
     // Firefox requires the request itself to run before the first await.
-    if (!await api.permissions.request({ origins })) {
-      status.textContent = "Allow the local connection to use the Store app.";
-      return;
-    }
+    granted = await api.permissions.request({ origins });
     const response = await globalThis.quiverTransport.send({ version: 1, action: "ping" });
     status.textContent = response?.ok ? "Connected to QuiverDL." : "Update and open QuiverDL, then try again.";
   } catch {
-    status.textContent = "Open the updated QuiverDL app once, then try again.";
+    status.textContent = granted ? "Open the updated QuiverDL app once, then try again." :
+      "Open QuiverDL. Store installations also need local connection permission.";
   }
 });

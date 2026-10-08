@@ -9,6 +9,8 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   let onAction;
   let onInstalled;
   let permissionGranted = true;
+  let permissionRequestGranted = true;
+  let optionsOpened = 0;
   let downloadedItem;
   let accepted = true;
   let pingAccepted = true;
@@ -23,7 +25,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   const api = {
     permissions: {
       async contains() { return permissionGranted; },
-      async request() { permissionGranted = true; return true; },
+      async request() { permissionGranted = permissionRequestGranted; return permissionRequestGranted; },
       onRemoved: { addListener() {} },
     },
     contextMenus: {
@@ -44,7 +46,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     },
     runtime: {
       onInstalled: { addListener(listener) { onInstalled = listener; } },
-      async openOptionsPage() {},
+      async openOptionsPage() { optionsOpened++; },
       async sendNativeMessage(_host, message) {
         // The fixture adapter below calls with a message directly for Firefox.
         if ((_host?.action ?? message?.action) === "ping") return { ok: pingAccepted };
@@ -168,5 +170,12 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onChanged({ id: 201, filename: { current: "file.bin" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(cancellations, beforeConsent + 2, "A later event can hand off after the app becomes available");
+    permissionGranted = false;
+    permissionRequestGranted = false;
+    const previousOptions = optionsOpened;
+    onAction();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(optionsOpened, previousOptions + 1, "Declining Store access never blocks settings");
+    assert.equal(settings.connectionStatus, "Connected to QuiverDL", "Native messaging remains available after permission denial");
   }
 }

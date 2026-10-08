@@ -41,13 +41,11 @@ api.runtime.onInstalled.addListener(() => {
 api.action.onClicked.addListener(() => {
   // Request directly in the user gesture, including upgrades and revocations.
   void api.permissions.request(localOrigins).then(async (granted) => {
-    if (!granted) return report(false, permissionMessage);
     try {
       const result = await globalThis.quiverTransport.send({ version: 1, action: "ping" });
       await report(Boolean(result?.ok), result?.ok ? "Connected to QuiverDL" : "Open QuiverDL to connect.");
-    } catch { await report(false, "Open QuiverDL to connect."); }
-    await api.runtime.openOptionsPage();
-  }).catch(() => {});
+    } catch { await report(false, granted ? "Open QuiverDL to connect." : permissionMessage); }
+  }).finally(() => api.runtime.openOptionsPage()).catch(() => {});
 });
 api.permissions.onRemoved.addListener(() => void showMissingPermission().catch(() => {}));
 void showMissingPermission().catch(() => {});
