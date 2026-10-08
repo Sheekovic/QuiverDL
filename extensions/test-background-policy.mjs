@@ -6,8 +6,14 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   let onCreated;
   let onChanged;
   let onClicked;
+  let onAction;
+  let onInstalled;
+  let permissionGranted = true;
+  let permissionRequestGranted = true;
+  let optionsOpened = 0;
   let downloadedItem;
   let accepted = true;
+  let pingAccepted = true;
   let nativeMessages = 0;
   let cancellations = 0;
   const settings = {
@@ -17,6 +23,11 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     allowedDomains: [],
   };
   const api = {
+    permissions: {
+      async contains() { return permissionGranted; },
+      async request() { permissionGranted = permissionRequestGranted; return permissionRequestGranted; },
+      onRemoved: { addListener() {} },
+    },
     contextMenus: {
       create() {},
       onClicked: { addListener(listener) { onClicked = listener; } },
@@ -34,10 +45,13 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
       },
     },
     runtime: {
-      onInstalled: { addListener() {} },
-      async sendNativeMessage() {
+      onInstalled: { addListener(listener) { onInstalled = listener; } },
+      async openOptionsPage() { optionsOpened++; },
+      async sendNativeMessage(_host, message) {
+        // The fixture adapter below calls with a message directly for Firefox.
+        if ((_host?.action ?? message?.action) === "ping") return { ok: pingAccepted };
         nativeMessages += 1;
-        return { ok: accepted };
+        return { ok: accepted, requestId: accepted ? "fixture-request" : null };
       },
     },
     storage: {
@@ -49,7 +63,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
       },
     },
     action: {
-      onClicked: { addListener() {} },
+      onClicked: { addListener(listener) { onAction = listener; } },
       async setBadgeText() {},
       async setTitle() {},
     },
@@ -57,6 +71,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   const source = await readFile(new URL(relativePath, import.meta.url), "utf8");
   vm.runInNewContext(source, {
     URL,
+    quiverTransport: { send: (...args) => api.runtime.sendNativeMessage(...args) },
     chrome: api,
     console,
     setTimeout,
@@ -98,6 +113,11 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onCreated({ id: 103, url: "https://example.test/file", totalBytes: 1000 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(cancellations, 3, "Firefox retains a download when the desktop rejects it");
+    const attemptsBeforeChange = nativeMessages;
+    downloadedItem = { id: 103, url: "https://example.test/file", totalBytes: 1000 };
+    onChanged({ id: 103, filename: { current: "file.bin" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, attemptsBeforeChange, "A failed or ambiguous handoff is not resubmitted by a change event");
     accepted = true;
     settings.interceptionEnabled = false;
     onCreated({ id: 104, url: "https://example.test/file", totalBytes: 1000 });
@@ -111,5 +131,51 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     onClicked({ menuItemId: "quiverdl-download", linkUrl: "magnet:?xt=urn:btih:0123456789012345678901234567890123456789" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(nativeMessages, previousMessages + 1, "Magnet context-menu links reach QuiverDL");
+    vm.runInNewContext(source, {
+      URL, quiverTransport: { send: (...args) => api.runtime.sendNativeMessage(...args) },
+      chrome: api, console, setTimeout,
+    });
+    const beforeRestart = nativeMessages;
+    onCreated({ id: 100, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, beforeRestart, "Background restart remembers an attempted download");
+    onCreated({ id: 100, startTime: "2026-10-07T12:00:00Z", url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(nativeMessages, beforeRestart + 1, "A reused ID with a new creation time remains eligible");
+    permissionGranted = false;
+    accepted = false;
+    pingAccepted = false;
+    onInstalled({ reason: "update", previousVersion: "0.4.0" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.match(settings.connectionStatus, /toolbar button/);
+    const beforeConsent = cancellations;
+    onCreated({ id: 200, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent, "Missing upgrade permission retains Firefox's download");
+    assert.equal(settings.quiverAttemptedDownloads.includes("200:"), false, "Missing permission does not claim a download");
+    accepted = true;
+    pingAccepted = true;
+    onAction();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(permissionGranted, true, "Toolbar gesture grants the upgrade permission");
+    onCreated({ id: 200, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent + 1, "Capture resumes after upgrade consent without a pairing code");
+    pingAccepted = false;
+    onCreated({ id: 201, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(settings.quiverAttemptedDownloads.includes("201:"), false, "Offline discovery does not consume the handoff claim");
+    pingAccepted = true;
+    downloadedItem = { id: 201, url: "https://example.test/file", totalBytes: 1000 };
+    onChanged({ id: 201, filename: { current: "file.bin" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent + 2, "A later event can hand off after the app becomes available");
+    permissionGranted = false;
+    permissionRequestGranted = false;
+    const previousOptions = optionsOpened;
+    onAction();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(optionsOpened, previousOptions + 1, "Declining Store access never blocks settings");
+    assert.equal(settings.connectionStatus, "Connected to QuiverDL", "Native messaging remains available after permission denial");
   }
 }

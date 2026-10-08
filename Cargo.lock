@@ -4226,6 +4226,7 @@ dependencies = [
  "librqbit-bencode",
  "percent-encoding",
  "quiver-core",
+ "quiver-native-host",
  "rand 0.10.3",
  "reqwest 0.12.28",
  "rustix",
@@ -4251,11 +4252,14 @@ dependencies = [
 name = "quiver-native-host"
 version = "0.4.0"
 dependencies = [
+ "axum",
  "dirs 7.0.0",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "subtle",
  "tempfile",
+ "tokio",
  "url",
  "uuid",
  "windows-sys 0.61.2",

@@ -183,6 +183,8 @@ jobs:
           node --check ../../extensions/chromium/options.js
           node --check ../../extensions/firefox/background.js
           node --check ../../extensions/firefox/options.js
+          node --check ../../extensions/firefox/transport.js
+          node --test ../../extensions/test-firefox-transport.mjs
           node ../../extensions/test-background-policy.mjs
           node -e "for (const file of process.argv.slice(1)) JSON.parse(require('fs').readFileSync(file, 'utf8'))" ../../extensions/chromium/manifest.json ../../extensions/firefox/manifest.json ../../extensions/native-host/chromium-host.json ../../extensions/native-host/firefox-host.json
           sh -n ../../extensions/native-host/install-linux.sh
@@ -275,7 +277,7 @@ jobs:
           if (-not (Test-Path -LiteralPath .\target\release\quiver-native-host.exe)) {
             throw 'The packaged desktop is missing its native browser helper.'
           }
-          $process = Start-Process -FilePath $executable -PassThru
+          $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru
           try {
             if ($process.WaitForExit(8000)) {
               throw "QuiverDL exited during the startup smoke test with code $($process.ExitCode)."
@@ -284,20 +286,6 @@ jobs:
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
           $packageOutput = Join-Path $env:RUNNER_TEMP 'quiverdl-store-smoke'
-          $missingHelperFixture = Join-Path $env:RUNNER_TEMP 'quiverdl-missing-helper'
-          New-Item -ItemType Directory -Path $missingHelperFixture -Force | Out-Null
-          $fixtureExecutable = Join-Path $missingHelperFixture 'quiver-desktop.exe'
-          Copy-Item -LiteralPath $executable -Destination $fixtureExecutable
-          $rejectedMissingHelper = $false
-          try {
-            .\scripts\package-msix.ps1 -ExecutablePath $fixtureExecutable -OutputDirectory $packageOutput -SkipBuild
-          } catch {
-            if ($_.Exception.Message -notlike 'Required browser companion helper not found:*') { throw }
-            $rejectedMissingHelper = $true
-          }
-          if (-not $rejectedMissingHelper) { throw 'MSIX packaging accepted an incomplete desktop installation.' }
           .\scripts\package-msix.ps1 `
-            -ExecutablePath $executable `
-            -OutputDirectory $packageOutput `
-            -SkipBuild
+            -OutputDirectory $packageOutput
 

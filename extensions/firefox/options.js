@@ -3,6 +3,13 @@ const enabled = document.querySelector("#enabled");
 const minimum = document.querySelector("#minimum");
 const domains = document.querySelector("#domains");
 const status = document.querySelector("#status");
+const connectionMode = document.querySelector("#connection-mode");
+api.storage.local.get({ quiverConnectionMode: "auto" }).then((value) => { connectionMode.value = value.quiverConnectionMode; });
+connectionMode.addEventListener("change", async () => {
+  await api.storage.local.set({ quiverConnectionMode: connectionMode.value, quiverStoreTransport: false });
+  await api.storage.local.remove("storePairingCode");
+  status.textContent = "Installation choice saved. The next download will use this choice.";
+});
 api.storage.local.get({ interceptionEnabled: true, minimumBytes: 0, allowedDomains: [], connectionStatus: "" }).then((value) => {
   enabled.checked = value.interceptionEnabled;
   minimum.value = value.minimumBytes / 1024 / 1024;
@@ -20,10 +27,15 @@ document.querySelector("#save").addEventListener("click", async () => {
   status.textContent = enabled.checked ? "Downloads will open in QuiverDL." : "Downloads will stay in Firefox.";
 });
 document.querySelector("#check").addEventListener("click", async () => {
+  let granted = false;
   try {
-    const response = await api.runtime.sendNativeMessage("app.quiverdl.native", { version: 1, action: "ping" });
+    const origins = ["http://127.0.0.1/*"];
+    // Firefox requires the request itself to run before the first await.
+    granted = await api.permissions.request({ origins });
+    const response = await globalThis.quiverTransport.send({ version: 1, action: "ping" });
     status.textContent = response?.ok ? "Connected to QuiverDL." : "Update and open QuiverDL, then try again.";
   } catch {
-    status.textContent = "Open the updated QuiverDL app once, then try again.";
+    status.textContent = granted ? "Open the updated QuiverDL app once, then try again." :
+      "Open QuiverDL. Store installations also need local connection permission.";
   }
 });

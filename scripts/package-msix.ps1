@@ -1,9 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $RepositoryRoot,
-    [string] $ExecutablePath,
-    [string] $OutputDirectory,
-    [switch] $SkipBuild
+    [string] $OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,39 +16,37 @@ $tauriConfigPath = Join-Path $tauriDirectory 'tauri.conf.json'
 $manifestTemplatePath = Join-Path $packagingRepository 'packaging\windows\msix\AppxManifest.xml.template'
 $iconDirectory = Join-Path $desktopDirectory 'src-tauri\icons'
 
+# This manifest requires application changes, not a packaging-only recovery of v0.4.0.
+if (-not (Test-Path -LiteralPath (Join-Path $repository 'crates\quiver-native-host\src\loopback.rs') -PathType Leaf)) {
+    throw 'This Store manifest requires a release containing the automatic browser transport. Do not reuse an older release tag.'
+}
+
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repository 'dist\store'
 }
 
-if (-not $SkipBuild) {
-    if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
-        $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
-        $cargoPath = Join-Path $cargoDirectory 'cargo.exe'
-        if (-not (Test-Path -LiteralPath $cargoPath -PathType Leaf)) {
-            throw 'cargo.exe was not found. Install the stable Rust toolchain with rustup.'
-        }
-        $env:PATH = "$cargoDirectory;$env:PATH"
+# Always build the selected source. External or stale executables are not accepted.
+if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) {
+    $cargoDirectory = Join-Path $env:USERPROFILE '.cargo\bin'
+    $cargoPath = Join-Path $cargoDirectory 'cargo.exe'
+    if (-not (Test-Path -LiteralPath $cargoPath -PathType Leaf)) {
+        throw 'cargo.exe was not found. Install the stable Rust toolchain with rustup.'
     }
-    Push-Location $desktopDirectory
-    try {
-        & npm.cmd run tauri -- build --no-bundle
-        if ($LASTEXITCODE -ne 0) {
-            throw 'The Tauri release build failed.'
-        }
-    } finally {
-        Pop-Location
-    }
+    $env:PATH = "$cargoDirectory;$env:PATH"
 }
+Push-Location $desktopDirectory
+try {
+    & npm.cmd run tauri -- build --no-bundle
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The Tauri release build failed.'
+    }
+} finally {
+    Pop-Location
+}
+$ExecutablePath = Join-Path $repository 'target\release\quiver-desktop.exe'
 
-if (-not $ExecutablePath) {
-    $ExecutablePath = Join-Path $repository 'target\release\quiver-desktop.exe'
-}
 if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
     throw "Desktop executable not found: $ExecutablePath"
-}
-$nativeHostPath = Join-Path (Split-Path -Parent $ExecutablePath) 'quiver-native-host.exe'
-if (-not (Test-Path -LiteralPath $nativeHostPath -PathType Leaf)) {
-    throw "Required browser companion helper not found: $nativeHostPath"
 }
 if (-not (Test-Path -LiteralPath $manifestTemplatePath -PathType Leaf)) {
     throw "MSIX manifest template not found: $manifestTemplatePath"
@@ -104,11 +100,7 @@ try {
 
     $resourceRoot = [IO.Path]::GetFullPath($tauriDirectory)
     $resourceRootPrefix = $resourceRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    Copy-Item -LiteralPath $nativeHostPath -Destination (Join-Path $stageDirectory 'quiver-native-host.exe')
-    $packagedResources = @([pscustomobject]@{
-        RelativePath = 'quiver-native-host.exe'
-        SourcePath = $nativeHostPath
-    })
+    $packagedResources = @()
     $resourceEntries = @()
     if ($null -ne $tauriConfig.bundle -and $null -ne $tauriConfig.bundle.resources) {
         $resourceEntries = @($tauriConfig.bundle.resources)
