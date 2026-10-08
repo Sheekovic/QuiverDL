@@ -110,7 +110,9 @@ async fn session(State(server): State<Arc<Server>>, request: Request) -> Respons
     if !allowed_headers(request.headers(), &server.authority) {
         return failure(StatusCode::FORBIDDEN);
     }
-    let Ok(_permit) = server.request.try_acquire() else {
+    let Ok(Ok(_permit)) =
+        tokio::time::timeout(Duration::from_secs(2), server.request.acquire()).await
+    else {
         return failure(StatusCode::SERVICE_UNAVAILABLE);
     };
     let Ok(Ok(bytes)) =
@@ -168,7 +170,14 @@ async fn message(State(server): State<Arc<Server>>, request: Request) -> Respons
         }
         rate.1 += 1;
     }
-    let Ok(permit) = server.request.clone().try_acquire_owned() else {
+    // A browser can release several downloads after the shared handshake.
+    // Bound the wait, but serialize that ordinary burst instead of rejecting it.
+    let Ok(Ok(permit)) = tokio::time::timeout(
+        Duration::from_secs(2),
+        server.request.clone().acquire_owned(),
+    )
+    .await
+    else {
         return failure(StatusCode::SERVICE_UNAVAILABLE);
     };
     let path = server.config_path.clone();
@@ -403,6 +412,29 @@ mod tests {
                 .status(),
             StatusCode::OK
         );
+        let mut burst = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let (client, endpoint, token) = (client.clone(), endpoint.clone(), token.clone());
+            burst.spawn(async move {
+                let response = client
+                    .post(endpoint)
+                    .header("Content-Type", "application/json")
+                    .header("X-QuiverDL-Connector", "1")
+                    .bearer_auth(token)
+                    .body(r#"{"version":1,"action":"enqueue","url":"https://example.test/burst"}"#)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body: serde_json::Value =
+                    serde_json::from_str(&response.text().await.unwrap()).unwrap();
+                assert_eq!(body["ok"], true);
+            });
+        }
+        while let Some(result) = burst.join_next().await {
+            result.unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&inbox).unwrap().count(), 9);
         // Exhaust the per-minute limit without mutating the inbox.
         let mut limited = false;
         for _ in 0..121 {
