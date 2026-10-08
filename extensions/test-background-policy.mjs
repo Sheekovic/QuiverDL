@@ -11,6 +11,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
   let permissionGranted = true;
   let downloadedItem;
   let accepted = true;
+  let pingAccepted = true;
   let nativeMessages = 0;
   let cancellations = 0;
   const settings = {
@@ -44,7 +45,9 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     runtime: {
       onInstalled: { addListener(listener) { onInstalled = listener; } },
       async openOptionsPage() {},
-      async sendNativeMessage() {
+      async sendNativeMessage(_host, message) {
+        // The fixture adapter below calls with a message directly for Firefox.
+        if ((_host?.action ?? message?.action) === "ping") return { ok: pingAccepted };
         nativeMessages += 1;
         return { ok: accepted, requestId: accepted ? "fixture-request" : null };
       },
@@ -139,6 +142,7 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     assert.equal(nativeMessages, beforeRestart + 1, "A reused ID with a new creation time remains eligible");
     permissionGranted = false;
     accepted = false;
+    pingAccepted = false;
     onInstalled({ reason: "update", previousVersion: "0.4.0" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.match(settings.connectionStatus, /toolbar button/);
@@ -148,11 +152,21 @@ for (const relativePath of ["chromium/background.js", "firefox/background.js"]) 
     assert.equal(cancellations, beforeConsent, "Missing upgrade permission retains Firefox's download");
     assert.equal(settings.quiverAttemptedDownloads.includes("200:"), false, "Missing permission does not claim a download");
     accepted = true;
+    pingAccepted = true;
     onAction();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(permissionGranted, true, "Toolbar gesture grants the upgrade permission");
     onCreated({ id: 200, url: "https://example.test/file", totalBytes: 1000 });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(cancellations, beforeConsent + 1, "Capture resumes after upgrade consent without a pairing code");
+    pingAccepted = false;
+    onCreated({ id: 201, url: "https://example.test/file", totalBytes: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(settings.quiverAttemptedDownloads.includes("201:"), false, "Offline discovery does not consume the handoff claim");
+    pingAccepted = true;
+    downloadedItem = { id: 201, url: "https://example.test/file", totalBytes: 1000 };
+    onChanged({ id: 201, filename: { current: "file.bin" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(cancellations, beforeConsent + 2, "A later event can hand off after the app becomes available");
   }
 }

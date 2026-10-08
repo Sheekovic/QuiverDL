@@ -10,13 +10,13 @@ async function showMissingPermission() {
 }
 
 async function readyToCapture() {
-  if (await api.permissions.contains(localOrigins)) return true;
-  // Conventional installations still work through their native host. Probe
-  // without queueing before marking a download attempted during an upgrade.
+  const localAllowed = await api.permissions.contains(localOrigins);
+  // Confirm availability without queueing before recording a handoff attempt.
+  // An offline app must not consume the claim for a request it never received.
   try {
     if ((await globalThis.quiverTransport.send({ version: 1, action: "ping" }))?.ok) return true;
   } catch { /* The Store app needs the browser's new host permission. */ }
-  await report(false, permissionMessage).catch(() => {});
+  await report(false, localAllowed ? "Open QuiverDL. Firefox keeps downloads when QuiverDL is unavailable." : permissionMessage).catch(() => {});
   return false;
 }
 
