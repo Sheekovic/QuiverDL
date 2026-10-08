@@ -63,3 +63,28 @@ test('malformed and oversized acknowledgements fail closed',async()=>{
     assert.equal(f.native(),0);assert.equal(f.requests.length,2);
   }
 });
+
+test('settings requests missing permission directly in the click gesture', async () => {
+  const optionsSource = await readFile(new URL("firefox/options.js", import.meta.url), "utf8");
+  const nodes = new Map();
+  let requested = false;
+  const context = {
+    document: { querySelector(selector) {
+      if (!nodes.has(selector)) nodes.set(selector, { addEventListener(_event, handler) { this.click = handler; } });
+      return nodes.get(selector);
+    } },
+    browser: {
+      storage: { local: { async get(defaults) { return defaults; } } },
+      permissions: {
+        contains() { assert.fail("Permission request must not follow an asynchronous permission check"); },
+        request() { requested = true; return Promise.resolve(true); },
+      },
+    },
+    quiverTransport: { async send() { return { ok: true }; } },
+  };
+  vm.runInNewContext(optionsSource, context);
+  const completed = nodes.get("#check").click();
+  assert.equal(requested, true, "Permission request happens synchronously with the click");
+  await completed;
+  assert.equal(nodes.get("#status").textContent, "Connected to QuiverDL.");
+});

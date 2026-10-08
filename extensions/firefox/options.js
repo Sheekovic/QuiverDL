@@ -22,8 +22,8 @@ document.querySelector("#save").addEventListener("click", async () => {
 document.querySelector("#check").addEventListener("click", async () => {
   try {
     const origins = ["http://127.0.0.1/*"];
-    if (!await api.permissions.contains({ origins }) &&
-        !await api.permissions.request({ origins })) {
+    // Firefox requires the request itself to run before the first await.
+    if (!await api.permissions.request({ origins })) {
       status.textContent = "Allow the local connection to use the Store app.";
       return;
     }
