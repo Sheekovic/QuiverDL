@@ -263,11 +263,17 @@ assert.doesNotMatch(
   "release automation must use the dedicated workflow-triggering token",
 );
 assert.match(releasePleaseWorkflow, /permissions:\s*\n\s+contents: read/);
-assert.equal(
-  (releasePleaseWorkflow.match(/persist-credentials: false/g) ?? []).length,
-  2,
-  "release and trusted-tool checkouts must not persist push credentials",
-);
+const releasePleaseCheckouts = releasePleaseWorkflow
+  .split(/(?=^ {6}- )/m)
+  .filter(step => /^ {6}- uses: actions\/checkout@|^ {8}uses: actions\/checkout@/m.test(step));
+assert.ok(releasePleaseCheckouts.length >= 2, "release and trusted-tool checkouts are required");
+for (const checkout of releasePleaseCheckouts) {
+  assert.match(
+    checkout,
+    /^ {10}persist-credentials: false\r?$/m,
+    "every release automation checkout must disable saved push credentials",
+  );
+}
 assert.match(releasePleaseWorkflow, /ref: \$\{\{ github\.sha \}\}/);
 assert.equal(
   (releasePleaseWorkflow.match(/RELEASE_TOKEN:/g) ?? []).length,
