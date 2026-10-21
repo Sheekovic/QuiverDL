@@ -5,6 +5,14 @@ on:
     branches:
       - main
   workflow_dispatch:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  pull_request:
+    paths:
+      - ".github/workflows/release-please.yml"
+      - "scripts/check-release-readiness.mjs"
+      - "scripts/test-check-release-readiness.mjs"
 
 permissions:
   contents: read
@@ -14,11 +22,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release-please:
-    name: Open or update the reviewed release PR
+  release-automation-tests:
+    name: Test release publication guard
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - run: node --test scripts/test-check-release-readiness.mjs
+
+  release-please:
+    name: Open or update the reviewed release PR
+    needs: release-automation-tests
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main' &&
+      (
+        github.event_name != 'workflow_run' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.head_repository.full_name == github.repository &&
+          (github.event.workflow_run.event == 'push' ||
+           github.event.workflow_run.event == 'workflow_dispatch')
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: Wait for the current version to finish publication
+        id: readiness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-release-readiness.mjs
       - name: Require the release automation token
+        if: steps.readiness.outputs.ready == 'true'
         env:
           RELEASE_TOKEN_CONFIGURED: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
         shell: bash
@@ -28,6 +74,7 @@ jobs:
             exit 1
           fi
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        if: steps.readiness.outputs.ready == 'true'
         id: release
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
