@@ -12,6 +12,7 @@ import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updat
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { MessageKey, translate } from "./i18n";
+import { DownloadFileActions } from "./DownloadFileActions";
 import quiverLogo from "../src-tauri/icons/icon.png";
 
 type LinkInspectionResponse = {
@@ -2814,6 +2815,7 @@ function App() {
                 <DownloadRow
                   item={item}
                   key={item.id}
+                  language={settings.language}
                   onControl={(action) => void controlDownload(item, action)}
                   onRemove={() => removeDownload(item.id)}
                   onRetry={() => retryDownload(item)}
@@ -2853,7 +2855,7 @@ function FilterButton({ active, count, label, onClick }: { active: boolean; coun
   );
 }
 
-function DownloadRow({ item, onControl, onRemove, onRetry, completedLabel, removeLabel }: { item: DownloadItem; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void; completedLabel: string | null; removeLabel: string }) {
+function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLabel, removeLabel }: { item: DownloadItem; language: "en" | "ar"; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void; completedLabel: string | null; removeLabel: string }) {
   const percentage = item.totalBytes !== null && item.totalBytes > 0n
     ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
@@ -2892,6 +2894,9 @@ function DownloadRow({ item, onControl, onRemove, onRetry, completedLabel, remov
         )}
       </div>
       <div className="row-actions">
+        {item.status === "completed" && (
+          <DownloadFileActions destination={item.destination} directory={item.kind === "torrent"} language={language} />
+        )}
         {canPause && <button type="button" onClick={() => onControl("pause")}>Pause</button>}
         {item.status === "paused" && <button type="button" onClick={() => item.recoverable ? onRetry() : onControl("resume")}>Resume</button>}
         {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}

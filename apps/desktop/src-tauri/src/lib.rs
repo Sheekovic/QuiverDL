@@ -23,6 +23,7 @@ use url::Url;
 mod browser_bridge;
 mod clipboard_monitor;
 mod desktop_integration;
+mod file_actions;
 mod media;
 mod persistence;
 mod proxy_credentials;
@@ -927,6 +928,7 @@ pub fn run() {
             control_torrent_download,
             inspect_torrent_source,
             desktop_integration::take_open_requests,
+            file_actions::open_download_destination,
             torrent_file::torrent_file_url,
             torrent::preview_magnet_files,
             control_download,

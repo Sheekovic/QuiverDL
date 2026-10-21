@@ -751,7 +751,9 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 20px; }
   font-family: ui-monospace, "Cascadia Code", monospace;
   font-size: 9px;
 }
-.row-actions { display: flex; gap: 6px; align-self: center; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; align-self: center; max-width: 250px; }
+.completed-file-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.completed-file-actions .item-error { flex-basis: 100%; margin: 0; }
 .row-actions button {
   padding: 7px 9px;
   color: var(--muted);
@@ -762,6 +764,7 @@ progress::-moz-progress-bar { background: var(--accent); border-radius: 20px; }
   cursor: pointer;
 }
 .row-actions button:hover { color: var(--text); border-color: var(--accent); }
+.row-actions button:disabled { opacity: 0.55; cursor: wait; }
 .row-actions .danger:hover { color: var(--danger); border-color: var(--danger); }
 
 @media (prefers-color-scheme: light) {
