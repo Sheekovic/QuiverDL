@@ -2,6 +2,13 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.4.2](https://github.com/Sheekovic/QuiverDL/compare/v0.4.1...v0.4.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **desktop:** add completed-download file actions and align Tauri dependencies ([#71](https://github.com/Sheekovic/QuiverDL/issues/71)) ([3a7f0bd](https://github.com/Sheekovic/QuiverDL/commit/3a7f0bde55d103ab908494b81be8daf99e1441e3))
+
 ## [0.4.1](https://github.com/Sheekovic/QuiverDL/compare/v0.4.0...v0.4.1) (2026-10-08)
 
 
