@@ -166,7 +166,7 @@ jobs:
         run: echo "No frontend, extension, or packaging files changed."
       - uses: actions/checkout@v7
         if: ${{ needs.changes.outputs.frontend == 'true' }}
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         if: ${{ needs.changes.outputs.frontend == 'true' }}
         with:
           node-version: 22
@@ -249,7 +249,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         if: ${{ needs.changes.outputs.desktop == 'true' }}
         with:
           node-version: 22
