@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "QuiverDL Browser Companion",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Send explicitly selected downloads to QuiverDL.",
   "icons": {
     "128": "icons/icon-128.png"
