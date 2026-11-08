@@ -14,7 +14,7 @@
     <link rel="icon" href="../assets/quiverdl.png" type="image/png">
     <link rel="apple-touch-icon" href="../assets/quiverdl.png">
     <link rel="stylesheet" href="../styles.css?v=20260821-2">
-    <script src="../site.js" defer></script>
+    <script src="../site.js?v=20261108" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -52,7 +52,7 @@
           QuiverDL does not operate an account service and does not collect analytics,
           advertising identifiers, telemetry, browsing history, or download activity.
         </p>
-        <p class="policy-date">Effective: August 19, 2026</p>
+        <p class="policy-date">Effective: November 8, 2026</p>
       </header>
 
       <div class="policy-layout">
@@ -106,8 +106,18 @@
             </p>
             <p>
               QuiverDL does not intentionally send download details to the project maintainers or
-              to an analytics service. Update checking is not currently implemented. If it is added
-              later, its behavior will be documented before release.
+              to an analytics service. Direct Linux AppImage builds can contact GitHub to check
+              for signed release updates and download an update when you request it. These requests
+              expose ordinary connection information to GitHub, not your download queue or history.
+              Microsoft Store installations use the Store's update channel; DEB and RPM installations
+              are updated through their package or release distribution channel.
+            </p>
+            <p>
+              Media inspection and downloading use yt-dlp and the media websites you select.
+              Torrent and magnet transfers are optional and require an explicit privacy
+              confirmation. They contact trackers and peers directly, which can reveal your IP
+              address. QuiverDL does not seed after completion, and HTTP proxy settings do not
+              cover BitTorrent peer traffic. No telemetry does not make these connections anonymous.
             </p>
           </section>
 
@@ -120,8 +130,9 @@
               headers, page contents, browsing history, or telemetry.
             </p>
             <p>
-              A captured download URL is sent through an authenticated local native-messaging
-              channel to the QuiverDL application so it can queue the download. URLs can contain
+              A captured download URL is sent to QuiverDL through an authenticated local connection.
+              Packaged Windows installs use a restricted localhost transport; direct installations
+              can use native messaging. URLs can contain
               private tokens, so avoid posting application logs or queue data publicly.
             </p>
           </section>
