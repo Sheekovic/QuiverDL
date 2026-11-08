@@ -2,6 +2,13 @@
 
 All notable changes will be documented here. QuiverDL follows semantic versioning once public releases begin.
 
+## [0.5.0](https://github.com/Sheekovic/QuiverDL/compare/v0.4.2...v0.5.0) (2026-11-08)
+
+
+### Features
+
+* **downloads:** show live speed, ETA and transfer details ([#79](https://github.com/Sheekovic/QuiverDL/issues/79)) ([204ab8a](https://github.com/Sheekovic/QuiverDL/commit/204ab8aeb97f5f786dc9b4af96c0dd9e0df63ed0))
+
 ## [0.4.2](https://github.com/Sheekovic/QuiverDL/compare/v0.4.1...v0.4.2) (2026-10-21)
 
 
