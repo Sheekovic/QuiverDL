@@ -72,7 +72,7 @@ jobs:
               esac
 
               case "$file" in
-                Cargo.toml|Cargo.lock|crates/*|apps/desktop/src-tauri/*|extensions/native-host/*|packaging/windows/*|scripts/*.ps1)
+                Cargo.toml|Cargo.lock|crates/*|apps/desktop/*|extensions/native-host/*|packaging/windows/*|scripts/*.ps1)
                   desktop=true
                   ;;
               esac
@@ -176,6 +176,9 @@ jobs:
         run: npm ci
       - if: ${{ needs.changes.outputs.frontend == 'true' }}
         run: npm run build
+      - name: Test transfer speed and ETA
+        if: ${{ needs.changes.outputs.frontend == 'true' }}
+        run: node --experimental-strip-types --test ../../scripts/test-transfer-metrics.mjs
       - name: Validate extension scripts and manifests
         if: ${{ needs.changes.outputs.frontend == 'true' }}
         run: |

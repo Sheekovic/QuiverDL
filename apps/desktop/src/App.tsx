@@ -13,6 +13,8 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import "./App.css";
 import { MessageKey, translate } from "./i18n";
 import { DownloadFileActions } from "./DownloadFileActions";
+import { DownloadDetails, transferLabels } from "./DownloadDetails";
+import { useTransferMetrics } from "./useTransferMetrics";
 import quiverLogo from "../src-tauri/icons/icon.png";
 
 type LinkInspectionResponse = {
@@ -2856,6 +2858,9 @@ function FilterButton({ active, count, label, onClick }: { active: boolean; coun
 }
 
 function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLabel, removeLabel }: { item: DownloadItem; language: "en" | "ar"; onControl: (action: "pause" | "resume" | "cancel") => void; onRemove: () => void; onRetry: () => void; completedLabel: string | null; removeLabel: string }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const metrics = useTransferMetrics(item.downloadedBytes, item.totalBytes, item.status);
+  const { text, speed, eta } = transferLabels(language, item.status, metrics.bytesPerSecond, metrics.etaSeconds, item.totalBytes !== null);
   const percentage = item.totalBytes !== null && item.totalBytes > 0n
     ? Math.min(100, Number((item.downloadedBytes * 1000n) / item.totalBytes) / 10)
     : null;
@@ -2865,6 +2870,14 @@ function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLa
   const hostname = (() => {
     try { return new URL(item.url).hostname; } catch { return "download"; }
   })();
+  const actions = <>
+    {item.status === "completed" && <DownloadFileActions destination={item.destination} directory={item.kind === "torrent"} language={language} />}
+    {canPause && <button type="button" onClick={() => onControl("pause")}>{language === "ar" ? "إيقاف مؤقت" : "Pause"}</button>}
+    {item.status === "paused" && <button type="button" onClick={() => item.recoverable ? onRetry() : onControl("resume")}>{language === "ar" ? "استئناف" : "Resume"}</button>}
+    {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>{language === "ar" ? "إلغاء" : "Cancel"}</button>}
+    {(item.status === "failed" || item.status === "cancelled") && <button type="button" onClick={onRetry}>{language === "ar" ? "إعادة المحاولة" : "Retry"}</button>}
+    {!isActive && <button type="button" onClick={onRemove}>{removeLabel}</button>}
+  </>;
 
   return (
     <article className={`download-row status-${item.status}`}>
@@ -2874,7 +2887,7 @@ function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLa
       <div className="download-content">
         <div className="download-title">
           <div>
-            <h3 title={item.destination}>{item.name}</h3>
+            <h3 title={item.destination}><button className="download-name" type="button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">{item.name}</button></h3>
             <p>{hostname}</p>
           </div>
           <span className="status-pill">{STATUS_LABELS[item.status]}</span>
@@ -2884,6 +2897,10 @@ function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLa
           <span>{formatBytes(item.downloadedBytes)}{item.totalBytes !== null ? ` of ${formatBytes(item.totalBytes)}` : ""}</span>
           <span>{completedLabel ?? (percentage === null ? "Size unknown" : `${percentage.toFixed(0)}%`)}</span>
         </div>
+        {isActive && <div className="download-transfer-meta" aria-live="off">
+          <span>{text.speed} <strong dir="ltr">{speed}</strong></span>
+          <span>{text.eta} <strong>{eta}</strong></span>
+        </div>}
         {item.status === "scheduled" && item.scheduledForMs && (
           <p className="queue-note">Starts {formatScheduledTime(item.scheduledForMs)}</p>
         )}
@@ -2894,15 +2911,13 @@ function DownloadRow({ item, language, onControl, onRemove, onRetry, completedLa
         )}
       </div>
       <div className="row-actions">
-        {item.status === "completed" && (
-          <DownloadFileActions destination={item.destination} directory={item.kind === "torrent"} language={language} />
-        )}
-        {canPause && <button type="button" onClick={() => onControl("pause")}>Pause</button>}
-        {item.status === "paused" && <button type="button" onClick={() => item.recoverable ? onRetry() : onControl("resume")}>Resume</button>}
-        {canCancel && <button className="danger" type="button" onClick={() => onControl("cancel")}>Cancel</button>}
-        {(item.status === "failed" || item.status === "cancelled") && <button type="button" onClick={onRetry}>Retry</button>}
-        {!isActive && <button type="button" onClick={onRemove}>{removeLabel}</button>}
+        <button type="button" onClick={() => setDetailsOpen(true)} aria-haspopup="dialog">{text.details}</button>
+        {actions}
       </div>
+      <DownloadDetails open={detailsOpen} onClose={() => setDetailsOpen(false)} name={item.name} language={language}
+        status={item.status} statusLabel={STATUS_LABELS[item.status]} source={hostname || (item.kind === "torrent" ? "BitTorrent" : "download")}
+        destination={item.destination} downloaded={formatBytes(item.downloadedBytes)} total={item.totalBytes === null ? text.unknown : formatBytes(item.totalBytes)} totalKnown={item.totalBytes !== null}
+        percentage={percentage} {...metrics} actions={actions} error={item.error} />
     </article>
   );
 }
