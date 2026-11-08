@@ -54,7 +54,11 @@ connection policies, and speed limits. The desktop app persists its queue and se
 recovers interrupted work, provides adaptive themes, English/Arabic direction support, tray and
 notification behavior, supports durable scheduled starts and parallel or sequential FIFO queues,
 supports direct, system, and credential-safe custom proxy routing, and never silently overwrites a
-destination. It also provides an opt-in clipboard monitor, customizable MIME/extension routing,
+destination. It also provides live download speed and remaining-time estimates, and a download details window with a recent
+speed graph, transfer totals, save location, and pause/resume/cancel controls. Click a download's
+filename or its Download details button to open the window. Speed measurements reset on pause,
+retry, and restart; unknown-size downloads show their speed without inventing a remaining time.
+The desktop also provides an opt-in clipboard monitor, customizable MIME/extension routing,
 yt-dlp media metadata and quality selection, and native magnet transfers with validated HTTPS
 trackers. The Torrent / Magnet tab opens local `.torrent` files, previews their file lists and sizes,
 lets users select individual files, and chooses the destination before starting. Remote torrent
